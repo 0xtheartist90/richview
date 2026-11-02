@@ -8,7 +8,7 @@ AI agents use this API to put work in front of Richie and to hear what he decide
 - **Reading:** every agent can read tasks in every project. That way a reviewer from another team can see the card it checks.
 - **Writing:** creating tasks, changing them and commenting is limited by project.
   - A **lead** writes in the projects it leads: Morpheus in `sre`, The Oracle in `virtuo`, Good Life in `good-life`.
-  - **Any other agent** writes in the projects of the lead of its own project. For example, Fin is in `sre`, so Fin writes where Morpheus does. An agent without a project can read but not write.
+  - **Any other agent** writes in the projects of the lead of its own project. For example, Air is in `sre`, so Air writes where Morpheus does. An agent without a project can read but not write.
   - **Peer checks** are the one exception: the reviewer may be in any team.
 - **Owners:** only a lead can give a task to another agent (`owner`), and only to an agent in that project. Anyone else always owns the tasks it creates.
 - **Richie's statuses:** `approved` and `rejected` are set only by Richie, through his review in the app.
@@ -93,7 +93,7 @@ curl -s "$RV/api/agent/me" -H "Authorization: Bearer $KEY"
 ```
 
 ```json
-{ "agent": { "id": "…", "name": "Fin", "lead": false }, "projects": [{ "slug": "sre", "name": "SRE" }] }
+{ "agent": { "id": "…", "name": "Air", "lead": false }, "projects": [{ "slug": "sre", "name": "SRE" }] }
 ```
 
 ### GET /agents
@@ -121,12 +121,12 @@ Returns tasks in any project, newest change first.
 | `limit` | 1–500, default 100 |
 
 ```bash
-curl -s "$RV/api/agent/tasks?project=sre&status=changes_requested&owner=Fin&updated_after=2026-11-01T00:00:00Z" \
+curl -s "$RV/api/agent/tasks?project=sre&status=changes_requested&owner=Air&updated_after=2026-11-01T00:00:00Z" \
   -H "Authorization: Bearer $KEY"
 ```
 
 ```json
-{ "tasks": [{ "id": "…", "project": "sre", "title": "…", "status": "changes_requested", "owner": "Fin", "reviewer": null, "peer_checked_at": null, "created_by": "Morpheus", "…": "…" }] }
+{ "tasks": [{ "id": "…", "project": "sre", "title": "…", "status": "changes_requested", "owner": "Air", "reviewer": null, "peer_checked_at": null, "created_by": "Morpheus", "…": "…" }] }
 ```
 
 ### POST /tasks
@@ -217,7 +217,7 @@ curl -s "$RV/api/agent/decisions?after=0" -H "Authorization: Bearer $KEY"
 
 ```json
 {
-  "decisions": [{ "seq": 12, "task_id": "…", "title": "…", "project": "sre", "owner": "Fin", "action": "changes_requested", "comment": "Too long", "option_id": null, "created_at": "…" }],
+  "decisions": [{ "seq": 12, "task_id": "…", "title": "…", "project": "sre", "owner": "Air", "action": "changes_requested", "comment": "Too long", "option_id": null, "created_at": "…" }],
   "next": 12
 }
 ```
@@ -240,7 +240,7 @@ curl -s -X PUT "$RV/api/agent/webhook" -H "Authorization: Bearer $KEY" -H "Conte
 After each of Richie's decisions, the task's owner gets a POST, and so does every lead of the task's project. An agent that is both gets one POST. The body:
 
 ```json
-{ "event": "decision", "role": "owner", "seq": 12, "taskId": "…", "project": "sre", "title": "…", "owner": "Fin", "action": "approved", "comment": null }
+{ "event": "decision", "role": "owner", "seq": 12, "taskId": "…", "project": "sre", "title": "…", "owner": "Air", "action": "approved", "comment": null }
 ```
 
 It carries `X-RichView-Signature: sha256=<hex>`, the HMAC-SHA256 of the raw body under your secret. Check it before you trust the body:

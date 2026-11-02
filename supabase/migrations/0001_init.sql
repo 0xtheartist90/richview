@@ -111,4 +111,4 @@ insert into storage.buckets (id, name, public) values ('previews', 'previews', t
 -- Starting data: the SRE project and the current agents (no keys yet; they're issued from the app).
 insert into projects (slug, name, domains) values
     ('sre', 'SRE', array['planning', 'onboarding', 'dashboard', 'finance', 'reports', 'platforms', 'ops']);
-insert into agents (name) values ('Morpheus'), ('Air'), ('Obi'), ('Fin'), ('Dash'), ('Mouse');
+insert into agents (name) values ('Morpheus'), ('Air'), ('Obi'), ('Dash');
