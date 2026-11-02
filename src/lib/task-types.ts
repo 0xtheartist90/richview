@@ -4,6 +4,7 @@ export const TASK_STATUSES = [
     'new',
     'planned',
     'in_progress',
+    'peer_review',
     'review',
     'changes_requested',
     'blocked',
@@ -18,6 +19,7 @@ export const STATUS_META: Record<TaskStatus, { label: string; hex: string; short
     new: { label: 'New', hex: '#c8ccd2' },
     planned: { label: 'Planned', hex: '#7ea6d8' },
     in_progress: { label: 'In progress', hex: '#a78bfa' },
+    peer_review: { label: 'Peer review', short: 'Peer', hex: '#5fb8c2' },
     review: { label: 'Review', hex: '#d4b062' },
     changes_requested: { label: 'Changes requested', short: 'Changes', hex: '#c98a5a' },
     blocked: { label: 'Blocked', hex: '#f43f5e' },
@@ -29,6 +31,7 @@ export const PHONE_ORDER: TaskStatus[] = [
     'review',
     'changes_requested',
     'blocked',
+    'peer_review',
     'in_progress',
     'planned',
     'new',
@@ -39,6 +42,7 @@ export const DESK_ORDER: TaskStatus[] = [
     'new',
     'planned',
     'in_progress',
+    'peer_review',
     'review',
     'changes_requested',
     'blocked',
@@ -57,6 +61,9 @@ export type Task = {
     priority: 'urgent' | 'high' | 'normal' | 'low';
     domain: string;
     owner: string;
+    /** The agent who peer-checks the work before Richie sees it, if any. */
+    reviewer: string;
+    peerCheckedAt: string | null;
     project: { slug: string; name: string };
     impact: string;
     effort: string;

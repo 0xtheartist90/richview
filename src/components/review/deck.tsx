@@ -99,9 +99,13 @@ export function ReviewDeck({ initial, renderedAt }: { initial: Task[]; renderedA
         }
     };
     const x = useMotionValue(0);
-    const top = items[0] ?? null;
+    // Only one agent's cards, when picked.
+    const [owner, setOwner] = useState<string | null>(null);
+    const owners = [...new Set(items.map((t) => t.owner).filter(Boolean))].sort();
+    const stack = owner && owners.includes(owner) ? items.filter((t) => t.owner === owner) : items;
+    const top = stack[0] ?? null;
 
-    /** Saves a held verdict now (the owner then hears it); back in the stack when it didn't save. */
+    /** Saves a held verdict now (the project's lead then hears it); back in the stack when it didn't save. */
     const save = useCallback(
         async (id: string) => {
             const p = pending.current.get(id);
@@ -272,13 +276,29 @@ export function ReviewDeck({ initial, renderedAt }: { initial: Task[]; renderedA
             <header className='mb-3 flex items-center gap-3'>
                 <h1 className='label-hud text-white/55'>review</h1>
                 <span className='readout ml-auto text-sm text-white/45'>
-                    <span className='text-glow text-base'>{items.length}</span> waiting
+                    <span className='text-glow text-base'>{stack.length}</span> waiting
                 </span>
             </header>
+            {owners.length > 1 && (
+                <div className='no-scrollbar -mx-4 mb-3 flex gap-2 overflow-x-auto px-4'>
+                    {[null, ...owners].map((o) => (
+                        <button
+                            key={o ?? 'all'}
+                            onClick={() => setOwner(o)}
+                            aria-pressed={(owner ?? null) === o}
+                            className={cn(
+                                'inline-flex h-8 shrink-0 items-center rounded-full px-3 text-sm',
+                                (owner ?? null) === o ? 'btn-key' : 'border border-white/[0.08] text-white/60'
+                            )}>
+                            {o ?? 'Everyone'}
+                        </button>
+                    ))}
+                </div>
+            )}
             <div className='relative flex-1'>
                 {top ? (
                     // The next two wait underneath, growing into place as the top one moves away.
-                    items
+                    stack
                         .slice(0, 3)
                         .map((task, i) =>
                             i === 0 ? (

@@ -1,0 +1,217 @@
+// What the agent API (/api/agent/*) shares: who's calling (a lead, by its key), what a task looks like on the wire,
+// what a request may hold, and the answers it gets. Only lead agents have a key; every other agent is a name that
+// owns, reviews or comments on a card. Leads read every project and write only in their own (peer checks aside).
+// Server only.
+import { NextResponse } from 'next/server';
+
+import { db } from '@/lib/supabase';
+import { TASK_STATUSES } from '@/lib/task-types';
+
+import { createHash } from 'node:crypto';
+import 'server-only';
+import { z } from 'zod';
+
+export type Project = { id: string; slug: string; name: string };
+export type Lead = { id: string; name: string; projects: Project[] };
+
+export const hashKey = (key: string) => createHash('sha256').update(key).digest('hex');
+
+/** A JSON error the agent can read: `{ "error": "..." }`. */
+export const fail = (status: number, error: string) => NextResponse.json({ error }, { status });
+
+/**
+ * The lead behind `Authorization: Bearer <key>`, with the projects it writes in; a 401 answer when the key is
+ * missing, unknown, or not an active lead's.
+ */
+export async function authLead(req: Request): Promise<Lead | NextResponse> {
+    const key = /^Bearer\s+(\S+)$/i.exec(req.headers.get('authorization') ?? '')?.[1];
+    if (!key) return fail(401, 'Send Authorization: Bearer <your API key>');
+    const { data, error } = await db()
+        .from('agents')
+        .select('id, name, lead_projects(project:projects(id, slug, name, archived_at))')
+        .eq('api_key_hash', hashKey(key))
+        .eq('is_lead', true)
+        .eq('active', true)
+        .maybeSingle();
+    if (error) return fail(502, error.message);
+    if (!data) return fail(401, 'Unknown or revoked API key');
+    const rows = (data.lead_projects ?? []) as unknown as {
+        project: (Project & { archived_at: string | null }) | null;
+    }[];
+
+    return {
+        id: data.id as string,
+        name: data.name as string,
+        projects: rows
+            .map((r) => r.project)
+            .filter((p): p is Project & { archived_at: string | null } => !!p && !p.archived_at)
+            .map(({ id, slug, name }) => ({ id, slug, name }))
+    };
+}
+
+export const writes = (lead: Lead, projectId: string) => lead.projects.some((p) => p.id === projectId);
+
+/** Every agent by name (case-insensitive), so a request can name an owner, reviewer or commenter. */
+export async function agentsByName(): Promise<Map<string, { id: string; name: string }>> {
+    const { data, error } = await db().from('agents').select('id, name').eq('active', true);
+    if (error) throw new Error(error.message);
+
+    return new Map(data.map((a) => [(a.name as string).toLowerCase(), { id: a.id as string, name: a.name as string }]));
+}
+
+/** The request's JSON body, or a 400 that says what's wrong with it (the first problem, with its field). */
+export async function parseBody<T extends z.ZodType>(req: Request, schema: T): Promise<z.infer<T> | NextResponse> {
+    const raw = await req.json().catch(() => undefined);
+    if (raw === undefined) return fail(400, 'The body must be JSON');
+    const parsed = schema.safeParse(raw);
+    if (!parsed.success) return fail(400, issue(parsed.error));
+
+    return parsed.data;
+}
+
+export function issue(error: z.ZodError) {
+    const first = error.issues[0];
+    if (!first) return 'Invalid request';
+    const path = first.path.join('.');
+
+    return path ? `${path}: ${first.message}` : first.message;
+}
+
+export const isUuid = (id: string) => z.uuid().safeParse(id).success;
+
+// ---- Tasks on the wire -----------------------------------------------------------------------------------------
+
+/** What agents may set a task to. Approved and rejected are Richie's, through his review. */
+export const AGENT_STATUSES = TASK_STATUSES.filter(
+    (s): s is Exclude<(typeof TASK_STATUSES)[number], 'approved' | 'rejected'> => s !== 'approved' && s !== 'rejected'
+);
+
+const text = (max: number) => z.string().trim().max(max, `at most ${max} characters`);
+const name = text(100).min(1, 'an agent name');
+
+/** The fields a task is made of, as POST and PATCH take them (PATCH: any of them; null clears). */
+const fields = {
+    title: text(200).min(1, 'is required'),
+    summary: text(300),
+    description: text(20_000),
+    status: z.enum(AGENT_STATUSES, `one of ${AGENT_STATUSES.join(', ')}`),
+    priority: z.enum(['urgent', 'high', 'normal', 'low'], 'one of urgent, high, normal, low'),
+    domain: text(60),
+    impact: z.enum(['revenue', 'time_saved', 'quality'], 'one of revenue, time_saved, quality'),
+    effort: z.enum(['S', 'M', 'L'], 'one of S, M, L'),
+    preview_url: z.url('a full URL').max(2000),
+    images: z.array(z.url('a full URL').max(2000)).max(10, 'at most 10'),
+    before: text(2000),
+    after: text(2000),
+    context: text(20_000),
+    options: z.array(z.strictObject({ id: text(50).min(1), label: text(200).min(1) })).max(10, 'at most 10'),
+    owner: name,
+    reviewer: name
+};
+
+export const TaskCreate = z.strictObject({
+    project: z.string().trim().min(1, 'a project slug'),
+    title: fields.title,
+    summary: fields.summary.optional(),
+    description: fields.description.optional(),
+    status: fields.status.optional(),
+    priority: fields.priority.optional(),
+    domain: fields.domain.optional(),
+    impact: fields.impact.optional(),
+    effort: fields.effort.optional(),
+    preview_url: fields.preview_url.optional(),
+    images: fields.images.optional(),
+    before: fields.before.optional(),
+    after: fields.after.optional(),
+    context: fields.context.optional(),
+    options: fields.options.optional(),
+    owner: fields.owner,
+    reviewer: fields.reviewer.optional()
+});
+export type TaskCreate = z.infer<typeof TaskCreate>;
+
+export const TaskPatch = z
+    .strictObject({
+        title: fields.title.optional(),
+        summary: fields.summary.nullable().optional(),
+        description: fields.description.nullable().optional(),
+        status: fields.status.optional(),
+        priority: fields.priority.optional(),
+        domain: fields.domain.nullable().optional(),
+        impact: fields.impact.nullable().optional(),
+        effort: fields.effort.nullable().optional(),
+        preview_url: fields.preview_url.nullable().optional(),
+        images: fields.images.optional(),
+        before: fields.before.nullable().optional(),
+        after: fields.after.nullable().optional(),
+        context: fields.context.nullable().optional(),
+        options: fields.options.nullable().optional(),
+        owner: fields.owner.optional(),
+        reviewer: fields.reviewer.nullable().optional()
+    })
+    .refine((p) => Object.keys(p).length > 0, 'Nothing to change');
+export type TaskPatch = z.infer<typeof TaskPatch>;
+
+/** The columns a task is read with: its project, and its owner, reviewer and creator by name. */
+export const TASK_SELECT =
+    '*, project:projects!inner(slug, name), owner:agents!owner_id(name), reviewer:agents!reviewer_id(name), creator:agents!created_by(name)';
+
+type Named = { name: string } | null;
+export type TaskRow = Record<string, unknown> & {
+    id: string;
+    project_id: string;
+    owner_id: string | null;
+    reviewer_id: string | null;
+    peer_checked_at: string | null;
+    status: string;
+    project: { slug: string; name: string };
+    owner: Named;
+    reviewer: Named;
+    creator: Named;
+};
+
+/** A task as the API answers it: plain fields, people by name. */
+export function apiTask(r: TaskRow) {
+    return {
+        id: r.id,
+        project: r.project.slug,
+        title: r.title,
+        summary: r.summary,
+        description: r.description,
+        status: r.status,
+        priority: r.priority,
+        domain: r.domain,
+        impact: r.impact,
+        effort: r.effort,
+        preview_url: r.preview_url,
+        images: r.images,
+        before: r.before,
+        after: r.after,
+        context: r.context,
+        options: r.options,
+        owner: r.owner?.name ?? null,
+        reviewer: r.reviewer?.name ?? null,
+        peer_checked_at: r.peer_checked_at,
+        created_by: r.creator?.name ?? null,
+        reviewed_at: r.reviewed_at,
+        created_at: r.created_at,
+        updated_at: r.updated_at
+    };
+}
+
+/** One task by id, as a row; null when there's none. */
+export async function taskRow(id: string): Promise<TaskRow | null> {
+    const { data, error } = await db().from('tasks').select(TASK_SELECT).eq('id', id).maybeSingle();
+    if (error) throw new Error(error.message);
+
+    return (data as TaskRow | null) ?? null;
+}
+
+/** Answers 502 with the database's message when a handler throws. */
+export async function guarded(run: () => Promise<Response>): Promise<Response> {
+    try {
+        return await run();
+    } catch (err) {
+        return fail(502, (err as Error).message);
+    }
+}

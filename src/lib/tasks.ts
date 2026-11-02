@@ -21,11 +21,13 @@ type Row = {
     context: string | null;
     created_at: string;
     updated_at: string;
+    peer_checked_at: string | null;
     owner: { name: string } | null;
+    reviewer: { name: string } | null;
     project: { slug: string; name: string };
 };
 
-const SELECT = '*, owner:agents!owner_id(name), project:projects!inner(slug, name)';
+const SELECT = '*, owner:agents!owner_id(name), reviewer:agents!reviewer_id(name), project:projects!inner(slug, name)';
 
 const toTask = (r: Row, returned: Set<string>): Task => ({
     id: r.id,
@@ -36,6 +38,8 @@ const toTask = (r: Row, returned: Set<string>): Task => ({
     priority: r.priority,
     domain: r.domain ?? '',
     owner: r.owner?.name ?? '',
+    reviewer: r.reviewer?.name ?? '',
+    peerCheckedAt: r.peer_checked_at,
     project: r.project,
     impact: (r.impact ?? '').replace('_', ' '),
     effort: r.effort ?? '',
@@ -151,6 +155,8 @@ export type Decision = {
     taskId: string;
     title: string;
     project: string;
+    projectId: string;
+    /** The task's owner (whose work it is). */
     agentId: string | null;
     action: DecisionAction;
     comment: string | null;
@@ -158,7 +164,7 @@ export type Decision = {
 
 /**
  * Richie's verdict: moves the task (only from a status it may come from, so a double swipe does nothing twice), keeps
- * his comment, and adds it to the decision feed the owner reads. Null when the task isn't where the verdict expects.
+ * his comment, and adds it to the decision feed the project's lead reads. Null when the task isn't where the verdict expects.
  */
 export async function decide(id: string, action: DecisionAction, comment?: string): Promise<Decision | null> {
     const move = MOVES[action];
@@ -172,7 +178,7 @@ export async function decide(id: string, action: DecisionAction, comment?: strin
         .update({ status: move.to, ...(from === 'review' ? { reviewed_at: new Date().toISOString() } : {}) })
         .eq('id', id)
         .eq('status', from)
-        .select('id, title, owner_id, project:projects(slug)')
+        .select('id, title, owner_id, project_id, project:projects(slug)')
         .maybeSingle();
     if (error) throw new Error(error.message);
     if (!data) return null;
@@ -193,6 +199,7 @@ export async function decide(id: string, action: DecisionAction, comment?: strin
         taskId: id,
         title: data.title as string,
         project: (data.project as unknown as { slug: string } | null)?.slug ?? '',
+        projectId: data.project_id as string,
         agentId: (data.owner_id as string | null) ?? null,
         action,
         comment: comment ?? null
