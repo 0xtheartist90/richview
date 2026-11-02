@@ -1,4 +1,5 @@
-// Tells the task's owner what Richie decided, with a copy to the project's lead, each at the webhook URL it set
+// Tells the task's owner what Richie decided, with a copy to the project's lead, and an agent when a recurring task
+// was made for it; each at the webhook URL the agent set
 // (PUT /api/agent/webhook). Each body is signed with that agent's webhook secret
 // (X-RichView-Signature: sha256=<hex HMAC of the raw body>). Agents without a webhook read the same decisions from
 // GET /api/agent/decisions instead. Server only.
@@ -58,7 +59,7 @@ export async function notifyDecision(d: Decision): Promise<void> {
         await db().from('decisions').update({ delivered_at: new Date().toISOString() }).eq('seq', d.seq);
 }
 
-async function post(hook: Hook, body: string, seq: number): Promise<boolean> {
+async function post(hook: Hook, body: string, what: number | string): Promise<boolean> {
     const signature = hook.webhook_secret
         ? `sha256=${createHmac('sha256', hook.webhook_secret).update(body).digest('hex')}`
         : null;
@@ -72,12 +73,34 @@ async function post(hook: Hook, body: string, seq: number): Promise<boolean> {
             body,
             signal: AbortSignal.timeout(5000)
         });
-        if (!res.ok) console.error(`Webhook ${hook.name}: ${res.status} for decision ${seq}`);
+        if (!res.ok)
+            console.error(
+                `Webhook ${hook.name}: ${res.status} for ${typeof what === 'number' ? `decision ${what}` : what}`
+            );
 
         return res.ok;
     } catch (err) {
-        console.error(`Webhook ${hook.name} failed for decision ${seq}:`, (err as Error).message);
+        console.error(
+            `Webhook ${hook.name} failed for ${typeof what === 'number' ? `decision ${what}` : what}:`,
+            (err as Error).message
+        );
 
         return false;
     }
+}
+
+/** Tells an agent a task was made for it (a recurring task, so it can start without polling). */
+export async function notifyNewTask(t: { taskId: string; title: string; ownerId: string }): Promise<void> {
+    const { data } = await db()
+        .from('agents')
+        .select('id, name, webhook_url, webhook_secret, active')
+        .eq('id', t.ownerId)
+        .maybeSingle();
+    const hook = data as Hook | null;
+    if (!hook?.active || !hook.webhook_url) return;
+    await post(
+        hook,
+        JSON.stringify({ event: 'task_created', taskId: t.taskId, title: t.title, owner: hook.name }),
+        `new task ${t.taskId}`
+    );
 }

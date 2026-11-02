@@ -14,7 +14,7 @@ import { DESK_ORDER, PHONE_ORDER, STATUS_META, type Task, type TaskStatus } from
 import type { ProjectSummary } from '@/lib/tasks';
 import { cn } from '@/lib/utils';
 
-import { ArrowRight, ChevronDown, Flag, RotateCcw, ShieldCheck, UserCheck } from 'lucide-react';
+import { ArrowRight, ChevronDown, Flag, Repeat, RotateCcw, ShieldCheck, UserCheck } from 'lucide-react';
 
 /** Done work starts folded away on a phone. */
 const FOLDED: TaskStatus[] = ['approved'];
@@ -360,6 +360,7 @@ function Row({ task, onOpen }: { task: Task; onOpen: () => void }) {
                                 aria-label={`Reviewer: ${task.reviewer}`}
                             />
                         ))}
+                    {task.recurring && <Repeat className='size-3.5 shrink-0 text-white/45' aria-label='Recurring' />}
                     {task.returned && (
                         <RotateCcw className='size-3.5 shrink-0 text-[var(--bronze)]' aria-label='Returned' />
                     )}

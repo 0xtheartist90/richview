@@ -131,7 +131,7 @@ const text = (max: number) => z.string().trim().max(max, `at most ${max} charact
 const name = text(100).min(1, 'an agent name');
 
 /** The fields a task is made of, as POST and PATCH take them (PATCH: any of them; null clears). */
-const fields = {
+export const fields = {
     title: text(200).min(1, 'is required'),
     summary: text(300),
     description: text(20_000),
@@ -235,6 +235,7 @@ export function apiTask(r: TaskRow) {
         owner: r.owner?.name ?? null,
         reviewer: r.reviewer?.name ?? null,
         peer_checked_at: r.peer_checked_at,
+        recurring_id: (r.recurring_id as string | null) ?? null,
         created_by: r.creator?.name ?? null,
         reviewed_at: r.reviewed_at,
         created_at: r.created_at,

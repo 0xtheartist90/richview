@@ -9,7 +9,7 @@ update agents set project_id = p.id
 from projects p
 where agents.project_id is null
   and (
-    (p.slug = 'sre' and agents.name in ('Morpheus', 'Air', 'Obi', 'Fin', 'Dash', 'Mouse'))
+    (p.slug = 'sre' and agents.name in ('Morpheus', 'Air', 'Obi', 'Dash'))
     or (p.slug = 'virtuo' and agents.name = 'The Oracle')
     or (p.slug = 'good-life' and agents.name in ('Good Life', 'GL Content', 'GL Visuals', 'GL Ads', 'GL Leads', 'GL Finance'))
   );

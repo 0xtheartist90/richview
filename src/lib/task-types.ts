@@ -64,6 +64,8 @@ export type Task = {
     /** The agent who peer-checks the work before Richie sees it, if any. */
     reviewer: string;
     peerCheckedAt: string | null;
+    /** Made by a recurring template. */
+    recurring: boolean;
     project: { slug: string; name: string };
     impact: string;
     effort: string;
