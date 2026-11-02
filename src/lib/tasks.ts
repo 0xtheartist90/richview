@@ -22,6 +22,7 @@ type Row = {
     created_at: string;
     updated_at: string;
     peer_checked_at: string | null;
+    recurring_id: string | null;
     owner: { name: string } | null;
     reviewer: { name: string } | null;
     project: { slug: string; name: string };
@@ -40,6 +41,7 @@ const toTask = (r: Row, returned: Set<string>): Task => ({
     owner: r.owner?.name ?? '',
     reviewer: r.reviewer?.name ?? '',
     peerCheckedAt: r.peer_checked_at,
+    recurring: !!r.recurring_id,
     project: r.project,
     impact: (r.impact ?? '').replace('_', ' '),
     effort: r.effort ?? '',

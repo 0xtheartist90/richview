@@ -2,7 +2,7 @@
 import { STATUS_META, type Task } from '@/lib/task-types';
 import { cn } from '@/lib/utils';
 
-import { ShieldCheck, Sparkles, UserCheck } from 'lucide-react';
+import { Repeat, ShieldCheck, Sparkles, UserCheck } from 'lucide-react';
 
 /** One colour per domain: the card's glow, its chip and the hero when there's no image. */
 const DOMAIN_HEX: Record<string, string> = {
@@ -52,6 +52,11 @@ export function TaskChips({ task, status, className }: { task: Task; status?: bo
             {PRIORITY_HEX[task.priority] && <Chip hex={PRIORITY_HEX[task.priority]}>{task.priority}</Chip>}
             {task.returned && <Chip hex='#f59e0b'>returned</Chip>}
             <PeerChip task={task} />
+            {task.recurring && (
+                <Chip>
+                    <Repeat className='size-3.5' /> recurring
+                </Chip>
+            )}
             {task.domain && <Chip hex={domainHex(task.domain)}>{task.domain}</Chip>}
             {task.impact && (
                 <Chip>

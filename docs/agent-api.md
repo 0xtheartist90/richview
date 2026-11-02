@@ -250,4 +250,78 @@ const expected = 'sha256=' + crypto.createHmac('sha256', SECRET).update(rawBody)
 const valid = crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(req.headers['x-richview-signature']));
 ```
 
+When a recurring task is made for you (see below), you also get `{ "event": "task_created", "taskId", "title", "owner" }`, signed the same way.
+
 RichView waits 5 seconds and doesn't retry. A missed POST is still in `GET /decisions`, so poll it now and then to catch up.
+
+## Recurring tasks
+
+A recurring task is a routine, such as the S1 checklist every day or the payout list on Saturday. Every morning at 06:00 Bangkok time, RichView turns each routine that is due into an ordinary task. The task title gets the date, for example "S1 checklist · Mon 3 Nov". The new task:
+
+- starts in `start_status`: `new`, `planned` (the default) or `in_progress`;
+- belongs to the routine's owner, who also gets a `task_created` webhook;
+- carries `recurring_id`, and shows a repeat icon on its card.
+
+**No duplicates.** While the previous task from a routine is still open (anything but `approved`), no new one is made that day; the day is marked as skipped. Set `allow_overlap: true` to make one anyway.
+
+The rules for who can write and who can own are the same as for tasks.
+
+### Schedule
+
+| `schedule` | Runs |
+| --- | --- |
+| `{ "every": "day" }` | every day |
+| `{ "every": "week", "days": ["sat"] }` | on those days: `sun` `mon` `tue` `wed` `thu` `fri` `sat` |
+| `{ "every": "month", "day": 1 }` | on that day of the month, or on the month's last day if it has fewer |
+| `{ "every": "n_days", "n": 3, "from": "2026-11-03" }` | every n days from `from` (default: today) |
+
+Days are counted in `timezone`, which defaults to `Asia/Bangkok`.
+
+### Fields
+
+A routine takes the same fields as a task: `title`, `summary`, `description`, `context`, `priority`, `domain`, `impact`, `effort`, `owner` and `reviewer`. It also takes `schedule` (required), `start_status`, `timezone`, `allow_overlap` and `active` (send `false` to pause it).
+
+### GET /recurring
+
+Returns every routine. Filter with `?project=sre`.
+
+```bash
+curl -s "$RV/api/agent/recurring?project=sre" -H "Authorization: Bearer $KEY"
+```
+
+### POST /recurring
+
+```bash
+curl -s -X POST "$RV/api/agent/recurring" -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" -d '{
+  "project": "sre",
+  "title": "Payout list",
+  "summary": "This week'\''s payouts, ready to send.",
+  "domain": "finance",
+  "schedule": { "every": "week", "days": ["sat"] }
+}'
+```
+
+The answer is `201` with `{ "recurring": { "id", "schedule", "last_run_on", "last_task_id", "last_skipped_on", … } }`.
+
+### GET /recurring/:id
+
+```bash
+curl -s "$RV/api/agent/recurring/$ROUTINE" -H "Authorization: Bearer $KEY"
+```
+
+### PATCH /recurring/:id
+
+Changes a routine. Tasks it already made stay as they are.
+
+```bash
+curl -s -X PATCH "$RV/api/agent/recurring/$ROUTINE" -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{ "schedule": { "every": "week", "days": ["fri", "sat"] }, "active": true }'
+```
+
+### DELETE /recurring/:id
+
+Removes a routine. The tasks it already made stay.
+
+```bash
+curl -s -X DELETE "$RV/api/agent/recurring/$ROUTINE" -H "Authorization: Bearer $KEY"
+```
