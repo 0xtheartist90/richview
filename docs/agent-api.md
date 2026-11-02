@@ -250,7 +250,7 @@ const expected = 'sha256=' + crypto.createHmac('sha256', SECRET).update(rawBody)
 const valid = crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(req.headers['x-richview-signature']));
 ```
 
-When a recurring task is made for you (see below), you also get `{ "event": "task_created", "taskId", "title", "owner" }`, signed the same way.
+When one of your routines failed or ran late (see Routines below), you also get `{ "event": "task_created", "taskId", "title", "owner" }` for its Review card, signed the same way.
 
 When Richie changes a card in the app, the owner and the project's lead get a POST, signed the same way:
 
@@ -260,40 +260,57 @@ When Richie changes a card in the app, the owner and the project's lead get a PO
 
 RichView waits 5 seconds and doesn't retry. A missed POST is still in `GET /decisions`, so poll it now and then to catch up.
 
-## Recurring tasks
+## Routines
 
-A recurring task is a routine, such as the S1 checklist every day or the payout list on Saturday. Every morning at 06:00 Bangkok time, RichView turns each routine that is due into an ordinary task. The task title gets the date, for example "S1 checklist · Mon 3 Nov". The new task:
+A routine is work that comes back: the daily VPS check, the Sunday payouts, the shift report check three times a day, a listener every 10 minutes. RichView knows from the routine's **schedule** when a run is due. You report each run with `POST /recurring/:id/runs`. The runs live in the routine's own history, on the **Routines** dashboard, and never on the board.
 
-- starts in `start_status`: `new`, `planned` (the default) or `in_progress`;
-- belongs to the routine's owner, who also gets a `task_created` webhook;
-- carries `recurring_id`, and shows a repeat icon on its card.
+What reaches Richie:
 
-**Not on the board.** Routine runs live on the **Routines** cockpit, one page per project. The cockpit shows what's done today, what's late and the last runs of each routine. The board is for improvements and one-off tasks.
+- **A failed run** (`"status": "failed"`) puts a card on **Review** straight away.
+- **A run that didn't come in time** (nothing reported by the due time plus `grace_minutes`) is noted as `missed` and also puts a card on Review. RichView checks every morning, and whenever Richie opens Review or Routines.
+- **One card at a time.** While a routine's card is still open on Review, RichView makes no new one for it, so a check every 10 minutes that stopped doesn't flood Review.
+- **Owner notice.** The card belongs to the routine's owner, who gets a `task_created` webhook.
 
-**Marking a run done.** The run's owner marks it done itself with `PATCH /tasks/:id` and `{ "status": "approved" }`. This is the one case where an agent may set `approved`; on any other task it's Richie's. If a run needs Richie's eye, set it to `review` instead.
+A run that went fine (`"status": "ok"`) only shows on the dashboard.
 
-**No duplicates.** While the previous task from a routine is still open (anything but `approved`), no new one is made that day; the day is marked as skipped. Set `allow_overlap: true` to make one anyway.
-
-The rules for who can write and who can own are the same as for tasks.
+The rules for who can write and who can own are the same as for tasks. The routine's owner, or any agent that writes in its project, reports its runs.
 
 ### Schedule
 
-| `schedule` | Runs |
+| `schedule` | Due |
 | --- | --- |
-| `{ "every": "day" }` | every day |
-| `{ "every": "week", "days": ["sat"] }` | on those days: `sun` `mon` `tue` `wed` `thu` `fri` `sat` |
-| `{ "every": "month", "day": 1 }` | on that day of the month, or on the month's last day if it has fewer |
-| `{ "every": "n_days", "n": 3, "from": "2026-11-03" }` | every n days from `from` (default: today) |
+| `{ "every": "day", "at": ["19:45"] }` | every day at 19:45 |
+| `{ "every": "day", "at": ["03:30", "11:30", "19:30"] }` | three times a day |
+| `{ "every": "week", "days": ["mon", "tue", "wed", "thu", "fri", "sat"], "at": ["04:30", "16:30"] }` | Monday to Saturday, twice a day |
+| `{ "every": "week", "days": ["sun"], "at": ["13:00"] }` | Sundays at 13:00 |
+| `{ "every": "month", "day": 1, "at": ["09:00"] }` | on that day of the month, or on the month's last day if it has fewer |
+| `{ "every": "n_days", "n": 3, "from": "2026-11-03", "at": ["08:00"] }` | every n days from `from` (default: today) |
+| `{ "every": "hours", "n": 4 }` | every 4 hours, around the clock (00:00, 04:00, …) |
+| `{ "every": "minutes", "n": 10 }` | every 10 minutes (5–1440) |
 
-Days are counted in `timezone`, which defaults to `Asia/Bangkok`.
+- **Days:** `sun` `mon` `tue` `wed` `thu` `fri` `sat`.
+- **Times (`at`):** written as `HH:MM`, in `timezone` (default `Asia/Bangkok`); the dashboard shows them in Bangkok time. Without `at`, a run any time that day counts, and it is late after 23:59 plus grace.
+- **Grace (`grace_minutes`):** how long after a due time a run may still come. The default is 60 minutes, or the interval for `hours` and `minutes`.
+- **Which run counts:** a run covers the first due time it came before (within grace), and one run covers one due time.
+- **Titles:** keep titles short and fixed ("Daily VPS Check"). The time belongs in the schedule, and the one-line summary goes in `summary`. Put the steps and the definition of done in `description`: the dashboard shows it when a routine is opened.
 
 ### Fields
 
-A routine takes the same fields as a task: `title`, `summary`, `description`, `context`, `priority`, `domain`, `impact`, `effort`, `owner` and `reviewer`. It also takes `schedule` (required), `start_status`, `timezone`, `allow_overlap` and `active` (send `false` to pause it).
+A routine takes:
+
+- `title`, `summary`, `description`, `context`, `priority`, `domain`, `owner` and `reviewer`;
+- `schedule` (required), `grace_minutes`, `timezone` and `active` (send `false` to pause it).
 
 ### GET /recurring
 
-Returns every routine. Filter with `?project=sre`.
+Returns every routine, with where it stands now:
+
+- `state`: `done`, `on_track`, `upcoming`, `late`, `failed`, `not_today` or `paused`;
+- `next_due`;
+- `hit_rate_7d`: the share of the last 7 days' due times that a run covered;
+- `last_run`.
+
+Filter with `?project=sre`.
 
 ```bash
 curl -s "$RV/api/agent/recurring?project=sre" -H "Authorization: Bearer $KEY"
@@ -304,16 +321,18 @@ curl -s "$RV/api/agent/recurring?project=sre" -H "Authorization: Bearer $KEY"
 ```bash
 curl -s -X POST "$RV/api/agent/recurring" -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" -d '{
   "project": "sre",
-  "title": "Payout list",
-  "summary": "This week'\''s payouts, ready to send.",
-  "domain": "finance",
-  "schedule": { "every": "week", "days": ["sat"] }
+  "title": "Daily PDF Catalin",
+  "summary": "PDF with the day'\''s numbers for Catalin",
+  "description": "1. Pull the day'\''s revenue per model\n2. Render the PDF\n3. Send it to Catalin on Telegram\nDone when Catalin has the PDF.",
+  "schedule": { "every": "day", "at": ["19:45"] }
 }'
 ```
 
-The answer is `201` with `{ "recurring": { "id", "schedule", "last_run_on", "last_task_id", "last_skipped_on", … } }`.
+The answer is `201` with `{ "recurring": { "id", "schedule", … } }`.
 
 ### GET /recurring/:id
+
+Returns one routine with its state and its runs of the last 8 days, newest first: `id`, `status`, `due_at`, `ran_at`, `note`, `agent` and `review_task`.
 
 ```bash
 curl -s "$RV/api/agent/recurring/$ROUTINE" -H "Authorization: Bearer $KEY"
@@ -321,16 +340,36 @@ curl -s "$RV/api/agent/recurring/$ROUTINE" -H "Authorization: Bearer $KEY"
 
 ### PATCH /recurring/:id
 
-Changes a routine. Tasks it already made stay as they are.
+Changes any field, including the schedule and its times.
 
 ```bash
 curl -s -X PATCH "$RV/api/agent/recurring/$ROUTINE" -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
-  -d '{ "schedule": { "every": "week", "days": ["fri", "sat"] }, "active": true }'
+  -d '{ "title": "Shift Report Check", "summary": "All shift reports in", "schedule": { "every": "day", "at": ["03:30", "11:30", "19:30"] }, "grace_minutes": 30 }'
 ```
+
+### POST /recurring/:id/runs
+
+Reports a run.
+
+- `status` is `ok` or `failed`.
+- `note` is optional. Say what happened; on a failure it goes on the Review card.
+- `ran_at` is optional, as an ISO time; the default is now.
+
+```bash
+curl -s -X POST "$RV/api/agent/recurring/$ROUTINE/runs" -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{ "status": "ok", "note": "PDF sent, 14 models" }'
+```
+
+```bash
+curl -s -X POST "$RV/api/agent/recurring/$ROUTINE/runs" -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{ "status": "failed", "note": "VPS 3 unreachable since 02:10" }'
+```
+
+The answer is `201` with `{ "run": { "id", "status", "ran_at", "note", "agent", "review_task" } }`. `review_task` is the Review card a failure raised.
 
 ### DELETE /recurring/:id
 
-Removes a routine. The tasks it already made stay.
+Removes a routine with its run history. The Review cards it raised stay.
 
 ```bash
 curl -s -X DELETE "$RV/api/agent/recurring/$ROUTINE" -H "Authorization: Bearer $KEY"

@@ -1,8 +1,8 @@
-// Recurring work: templates that turn into ordinary tasks on their days. The daily cron (and Richie's "Run now")
-// calls runRecurring; agents manage templates through /api/agent/recurring. Server only.
+// Routines: the work that comes back (a daily VPS check, the Sunday payouts, a check every 10 minutes). Agents report
+// each run (ok or failed); the schedule (src/lib/schedule.ts) says when one is due. Runs live in routine_runs, not on
+// the board: only a failed run, or one that didn't come in time, becomes a card on Review. Server only.
+import { type Rule, type RunLike, type Status, dateIn, statusOf, timeIn } from '@/lib/schedule';
 import { db } from '@/lib/supabase';
-import type { Task } from '@/lib/task-types';
-import { getRuns } from '@/lib/tasks';
 import { notifyNewTask } from '@/lib/webhooks';
 
 import 'server-only';
@@ -11,33 +11,36 @@ import { z } from 'zod';
 export const DAYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'] as const;
 export type Day = (typeof DAYS)[number];
 
-/** Where a recurring task may start. */
-export const START_STATUSES = ['new', 'planned', 'in_progress'] as const;
+const at = z
+    .array(z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'a time HH:MM, e.g. 19:45'))
+    .max(24, 'at most 24 times')
+    .optional();
 
-/** How often, as the API takes and gives it. */
+/** How often, and at what time of day, as the API takes and gives it. */
 export const Schedule = z.discriminatedUnion(
     'every',
     [
-        z.strictObject({ every: z.literal('day') }),
+        z.strictObject({ every: z.literal('day'), at }),
         z.strictObject({
             every: z.literal('week'),
             days: z
                 .array(z.enum(DAYS, `one of ${DAYS.join(', ')}`))
                 .min(1, 'at least one day')
-                .max(7)
+                .max(7),
+            at
         }),
-        z.strictObject({
-            every: z.literal('month'),
-            day: z.number().int().min(1, '1–31').max(31, '1–31')
-        }),
+        z.strictObject({ every: z.literal('month'), day: z.number().int().min(1, '1–31').max(31, '1–31'), at }),
         z.strictObject({
             every: z.literal('n_days'),
             n: z.number().int().min(2, '2–365').max(365, '2–365'),
             /** The first day it runs (YYYY-MM-DD); today when left out. */
-            from: z.iso.date('a date, e.g. 2026-11-03').optional()
-        })
+            from: z.iso.date('a date, e.g. 2026-11-03').optional(),
+            at
+        }),
+        z.strictObject({ every: z.literal('hours'), n: z.number().int().min(1, '1–24').max(24, '1–24') }),
+        z.strictObject({ every: z.literal('minutes'), n: z.number().int().min(5, '5–1440').max(1440, '5–1440') })
     ],
-    'every: one of day, week, month, n_days'
+    'every: one of day, week, month, n_days, hours, minutes'
 );
 export type Schedule = z.infer<typeof Schedule>;
 
@@ -51,7 +54,7 @@ export const validTimezone = (tz: string) => {
     }
 };
 
-export type RecurringRow = {
+export type RecurringRow = Rule & {
     id: string;
     project_id: string;
     title: string;
@@ -62,21 +65,9 @@ export type RecurringRow = {
     domain: string | null;
     impact: string | null;
     effort: string | null;
-    start_status: string;
     owner_id: string;
     reviewer_id: string | null;
     created_by: string | null;
-    every: 'day' | 'week' | 'month' | 'n_days';
-    weekdays: number[];
-    month_day: number | null;
-    interval_days: number | null;
-    anchor_on: string;
-    timezone: string;
-    allow_overlap: boolean;
-    active: boolean;
-    last_run_on: string | null;
-    last_task_id: string | null;
-    last_skipped_on: string | null;
     created_at: string;
     updated_at: string;
     project?: { slug: string; name: string };
@@ -90,37 +81,95 @@ export const RECURRING_SELECT =
 
 /** The schedule columns for a Schedule. */
 export function scheduleColumns(s: Schedule, today: string) {
+    const intraday = s.every === 'hours' || s.every === 'minutes';
+
     return {
-        every: s.every,
+        every: intraday ? 'intraday' : s.every,
         weekdays: s.every === 'week' ? [...new Set(s.days.map((d) => DAYS.indexOf(d)))].sort() : [],
         month_day: s.every === 'month' ? s.day : null,
         interval_days: s.every === 'n_days' ? s.n : null,
-        anchor_on: s.every === 'n_days' ? (s.from ?? today) : today
+        anchor_on: s.every === 'n_days' ? (s.from ?? today) : today,
+        times: intraday ? [] : [...new Set(s.at ?? [])].sort(),
+        every_minutes: s.every === 'hours' ? s.n * 60 : s.every === 'minutes' ? s.n : null
     };
 }
 
 export function scheduleOf(r: RecurringRow): Schedule {
-    if (r.every === 'week') return { every: 'week', days: r.weekdays.map((d) => DAYS[d]) };
-    if (r.every === 'month') return { every: 'month', day: r.month_day ?? 1 };
-    if (r.every === 'n_days') return { every: 'n_days', n: r.interval_days ?? 2, from: r.anchor_on };
+    const at = r.times.length ? { at: r.times } : {};
+    if (r.every === 'intraday') {
+        const m = r.every_minutes ?? 60;
 
-    return { every: 'day' };
+        return m % 60 === 0 ? { every: 'hours', n: m / 60 } : { every: 'minutes', n: m };
+    }
+    if (r.every === 'week') return { every: 'week', days: r.weekdays.map((d) => DAYS[d]), ...at };
+    if (r.every === 'month') return { every: 'month', day: r.month_day ?? 1, ...at };
+    if (r.every === 'n_days') return { every: 'n_days', n: r.interval_days ?? 2, from: r.anchor_on, ...at };
+
+    return { every: 'day', ...at };
 }
 
-/** "every day", "every Sat", "monthly on the 1st", "every 3 days": for the page. */
+const tzLabel = (tz: string) => (tz === 'Asia/Bangkok' ? 'BKK' : tz.split('/').pop()!.replace('_', ' '));
+const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+/** "Daily 19:45 BKK", "Mon–Sat 04:30, 16:30 BKK", "Every 4 hours", "Sun 13:00 BKK": for the cockpit. */
 export function describe(r: RecurringRow) {
-    const s = scheduleOf(r);
-    if (s.every === 'day') return 'Every day';
-    if (s.every === 'week')
-        return s.days.length === 7
-            ? 'Every day'
-            : `Every ${s.days.map((d) => d[0].toUpperCase() + d.slice(1)).join(', ')}`;
-    if (s.every === 'month') return `Monthly on day ${s.day}`;
+    if (r.every === 'intraday') {
+        const m = r.every_minutes ?? 60;
 
-    return `Every ${s.n} days`;
+        return m % 60 === 0 ? (m === 60 ? 'Every hour' : `Every ${m / 60} hours`) : `Every ${m} min`;
+    }
+    const when = r.times.length ? ` ${r.times.join(', ')} ${tzLabel(r.timezone)}` : '';
+    if (r.every === 'day') return `Daily${when}`;
+    if (r.every === 'month') return `Monthly on day ${r.month_day}${when}`;
+    if (r.every === 'n_days') return `Every ${r.interval_days} days${when}`;
+    const d = [...r.weekdays].sort();
+    const run = d.length > 2 && d.every((x, i) => i === 0 || x === d[i - 1] + 1);
+    const days =
+        d.length === 7
+            ? 'Daily'
+            : run
+              ? `${DAY_NAMES[d[0]]}–${DAY_NAMES[d.at(-1)!]}`
+              : d.map((x) => DAY_NAMES[x]).join(', ');
+
+    return `${days}${when}`;
 }
 
-export function apiRecurring(r: RecurringRow) {
+/** The cockpit's sections: how often a routine comes back. */
+export type Frequency = 'ongoing' | 'daily' | 'weekly' | 'other';
+
+export function frequencyOf(r: Pick<RecurringRow, 'every' | 'times' | 'weekdays'>): Frequency {
+    if (r.every === 'intraday' || r.times.length > 1) return 'ongoing';
+    if (r.every === 'day' || (r.every === 'week' && r.weekdays.length >= 5)) return 'daily';
+    if (r.every === 'week') return 'weekly';
+
+    return 'other';
+}
+
+export type RunRow = RunLike & {
+    id: string;
+    note: string | null;
+    agent: { name: string } | null;
+    task_id: string | null;
+};
+
+/** The last 8 days of runs of these routines (enough for today, the late check and the 7-day rate). */
+export async function recentRuns(ids: string[]): Promise<Map<string, RunRow[]>> {
+    const out = new Map<string, RunRow[]>(ids.map((id) => [id, []]));
+    if (!ids.length) return out;
+    const since = new Date(Date.now() - 8 * 86_400_000).toISOString();
+    const { data, error } = await db()
+        .from('routine_runs')
+        .select('id, recurring_id, status, due_at, ran_at, note, task_id, agent:agents(name)')
+        .in('recurring_id', ids)
+        .gte('ran_at', since)
+        .order('ran_at', { ascending: false });
+    if (error) throw new Error(error.message);
+    for (const r of data as unknown as (RunRow & { recurring_id: string })[]) out.get(r.recurring_id)?.push(r);
+
+    return out;
+}
+
+export function apiRecurring(r: RecurringRow, status?: Status, last?: RunRow) {
     return {
         id: r.id,
         project: r.project?.slug ?? null,
@@ -130,261 +179,195 @@ export function apiRecurring(r: RecurringRow) {
         context: r.context,
         priority: r.priority,
         domain: r.domain,
-        impact: r.impact,
-        effort: r.effort,
-        start_status: r.start_status,
         owner: r.owner?.name ?? null,
         reviewer: r.reviewer?.name ?? null,
         created_by: r.creator?.name ?? null,
         schedule: scheduleOf(r),
+        grace_minutes: r.grace_minutes,
         timezone: r.timezone,
-        allow_overlap: r.allow_overlap,
         active: r.active,
-        last_run_on: r.last_run_on,
-        last_task_id: r.last_task_id,
-        last_skipped_on: r.last_skipped_on,
+        ...(status
+            ? {
+                  state: status.state,
+                  next_due: status.next?.toISOString() ?? null,
+                  hit_rate_7d: status.hit7,
+                  last_run: last ? { status: last.status, ran_at: last.ran_at, note: last.note } : null
+              }
+            : {}),
         created_at: r.created_at,
         updated_at: r.updated_at
     };
 }
 
-// ---- Calendar ---------------------------------------------------------------------------------------------------
+// ---- Runs, and what reaches Review -------------------------------------------------------------------------------
 
-/** The date (YYYY-MM-DD) it is at `now` in a timezone. */
-export function dateIn(tz: string, now = new Date()) {
-    return new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(
-        now
-    );
-}
-
-const utc = (date: string) => new Date(`${date}T00:00:00Z`);
-
-/** Whether a template's schedule falls on this date. */
-export function dueOn(
-    r: Pick<RecurringRow, 'every' | 'weekdays' | 'month_day' | 'interval_days' | 'anchor_on'>,
-    date: string
-) {
-    const d = utc(date);
-    if (r.every === 'day') return true;
-    if (r.every === 'week') return r.weekdays.includes(d.getUTCDay());
-    if (r.every === 'month') {
-        const last = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
-
-        return d.getUTCDate() === Math.min(r.month_day ?? 1, last);
-    }
-    const days = Math.round((d.getTime() - utc(r.anchor_on).getTime()) / 86_400_000);
-
-    return days >= 0 && days % (r.interval_days ?? 1) === 0;
-}
-
-/** "Mon 3 Nov": the date in a generated task's title. */
-const label = (date: string) =>
-    utc(date).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' });
-
-// ---- Generating -------------------------------------------------------------------------------------------------
-
-export type RunResult = { created: { template: string; task: string }[]; skipped: string[]; failed: string[] };
+const CLOSED = ['approved', 'rejected'];
 
 /**
- * Turns every active template that's due today (in its own timezone) and hasn't run today into a task. While the
- * previous task from a template is still open, nothing new is made (unless the template allows overlap); that day is
- * marked as skipped; once that task is done, a later call the same day makes today's after all. Safe to call more than
- * once a day.
+ * A card on Review for a routine that failed or didn't run in time, unless one for it is still open there (one card
+ * per routine at a time, so a stuck check every 10 minutes doesn't flood Review). Returns the card's id.
  */
-export async function runRecurring(now = new Date()): Promise<RunResult> {
+async function raiseCard(r: RecurringRow, kind: 'failed' | 'late', due: Date | null, note: string | null) {
+    const open = await db()
+        .from('tasks')
+        .select('id')
+        .eq('recurring_id', r.id)
+        .not('status', 'in', `(${CLOSED.join(',')})`)
+        .limit(1)
+        .maybeSingle();
+    if (open.data) return open.data.id as string;
+
+    const when = due ? `${dateIn(r.timezone, due)} ${timeIn(r.timezone, due)} ${tzLabel(r.timezone)}` : '';
+    const { data, error } = await db()
+        .from('tasks')
+        .insert({
+            project_id: r.project_id,
+            recurring_id: r.id,
+            title: `${r.title} · ${kind === 'failed' ? 'failed' : 'late'}`.slice(0, 200),
+            summary: (kind === 'failed'
+                ? (note ?? 'The run reported a failure')
+                : `No run by ${when || 'its due time'}`
+            ).slice(0, 300),
+            description: r.description,
+            context: kind === 'failed' && note && note.length > 300 ? note : r.context,
+            status: 'review',
+            priority: r.priority === 'urgent' ? 'urgent' : 'high',
+            domain: r.domain,
+            owner_id: r.owner_id,
+            created_by: r.created_by,
+            images: []
+        })
+        .select('id, title')
+        .single();
+    if (error) throw new Error(error.message);
+    await notifyNewTask({ taskId: data.id as string, title: data.title as string, ownerId: r.owner_id });
+
+    return data.id as string;
+}
+
+/** A run an agent reports. A failed one also goes to Review. */
+export async function reportRun(
+    r: RecurringRow,
+    run: { status: 'ok' | 'failed'; note?: string; ran_at?: string; agentId: string | null }
+): Promise<RunRow & { review_task: string | null }> {
+    const ranAt = run.ran_at ?? new Date().toISOString();
+    const task = run.status === 'failed' ? await raiseCard(r, 'failed', null, run.note ?? null) : null;
+    const { data, error } = await db()
+        .from('routine_runs')
+        .insert({
+            recurring_id: r.id,
+            status: run.status,
+            ran_at: ranAt,
+            note: run.note ?? null,
+            agent_id: run.agentId,
+            task_id: task
+        })
+        .select('id, status, due_at, ran_at, note, task_id, agent:agents(name)')
+        .single();
+    if (error) throw new Error(error.message);
+
+    return { ...(data as unknown as RunRow), review_task: task };
+}
+
+/**
+ * The late check: the latest due time in the last 2 days that no run covered is noted as missed (once), and the
+ * routine gets a card on Review. Runs every morning (cron) and whenever Review or Routines opens. Safe to call often.
+ */
+export async function checkRoutines(now = new Date()): Promise<{ late: string[] }> {
     const { data, error } = await db().from('recurring').select('*').eq('active', true);
     if (error) throw new Error(error.message);
-    const result: RunResult = { created: [], skipped: [], failed: [] };
+    const rows = data as RecurringRow[];
+    const runs = await recentRuns(rows.map((r) => r.id));
+    const late: string[] = [];
 
-    for (const r of data as RecurringRow[]) {
-        const today = dateIn(r.timezone, now);
-        // A day that was only skipped (the last task still open) may run again once that task is done.
-        const skippedToday = r.last_skipped_on === today;
-        if ((r.last_run_on === today && !skippedToday) || !dueOn(r, today)) continue;
+    for (const r of rows) {
+        // A routine doesn't owe runs from before it existed (or before it last changed).
+        const since = Math.max(new Date(r.created_at).getTime(), new Date(r.updated_at).getTime());
+        const missed = statusOf(r, runs.get(r.id) ?? [], now).missed.filter((d) => d.getTime() > since);
+        if (!missed.length) continue;
+        const noted = new Set(
+            (runs.get(r.id) ?? []).filter((x) => x.status === 'missed').map((x) => new Date(x.due_at!).getTime())
+        );
+        // The latest one is enough: a check every 10 min that stopped hours ago is one problem, not dozens.
+        const latest = missed.at(-1)!;
+        if (noted.has(latest.getTime())) continue;
         try {
-            if (!r.allow_overlap && r.last_task_id) {
-                const prev = await db().from('tasks').select('status').eq('id', r.last_task_id).maybeSingle();
-                if (prev.data && !['approved', 'rejected'].includes(prev.data.status as string)) {
-                    if (skippedToday) continue;
-                    // Claimed for today only if nobody else ran it in the meantime.
-                    await db()
-                        .from('recurring')
-                        .update({ last_run_on: today, last_skipped_on: today })
-                        .eq('id', r.id)
-                        .or(`last_run_on.is.null,last_run_on.lt.${today}`);
-                    result.skipped.push(r.title);
-                    continue;
-                }
-            }
-            // Claim today first, so two runs at once can't both make a task.
-            const claim = await db()
-                .from('recurring')
-                .update({ last_run_on: today, last_skipped_on: null })
-                .eq('id', r.id)
-                .or(`last_run_on.is.null,last_run_on.lt.${today},last_skipped_on.eq.${today}`)
-                .select('id')
-                .maybeSingle();
-            if (claim.error) throw new Error(claim.error.message);
-            if (!claim.data) continue;
-
-            const { data: task, error: e } = await db()
-                .from('tasks')
-                .insert({
-                    project_id: r.project_id,
-                    title: `${r.title} · ${label(today)}`.slice(0, 200),
-                    summary: r.summary,
-                    description: r.description,
-                    context: r.context,
-                    priority: r.priority,
-                    domain: r.domain,
-                    impact: r.impact,
-                    effort: r.effort,
-                    status: r.start_status,
-                    owner_id: r.owner_id,
-                    reviewer_id: r.reviewer_id,
-                    created_by: r.created_by,
-                    recurring_id: r.id,
-                    images: []
-                })
-                .select('id, title')
-                .single();
-            if (e) throw new Error(e.message);
-            await db().from('recurring').update({ last_task_id: task.id }).eq('id', r.id);
-            result.created.push({ template: r.title, task: task.id as string });
-            await notifyNewTask({ taskId: task.id as string, title: task.title as string, ownerId: r.owner_id });
+            const task = await raiseCard(r, 'late', latest, null);
+            const ins = await db().from('routine_runs').insert({
+                recurring_id: r.id,
+                status: 'missed',
+                due_at: latest.toISOString(),
+                ran_at: now.toISOString(),
+                task_id: task
+            });
+            if (ins.error && !ins.error.message.includes('duplicate')) throw new Error(ins.error.message);
+            late.push(r.title);
         } catch (err) {
-            console.error(`Recurring "${r.title}":`, (err as Error).message);
-            result.failed.push(r.title);
+            console.error(`Late check "${r.title}":`, (err as Error).message);
         }
     }
 
-    return result;
+    return { late };
 }
 
-// ---- The cockpit ------------------------------------------------------------------------------------------------
-
-/** Where a routine stands today. */
-export type RoutineState =
-    | 'done'
-    | 'review'
-    | 'working'
-    | 'todo'
-    | 'blocked'
-    | 'changes'
-    | 'late'
-    | 'due'
-    | 'not_today'
-    | 'paused';
+// ---- The cockpit -------------------------------------------------------------------------------------------------
 
 export type RoutineView = {
     id: string;
+    project: { slug: string; name: string };
     title: string;
     summary: string;
+    description: string;
     schedule: string;
+    frequency: Frequency;
+    /** Sort key within a section: the first time of day (HH:MM), or the interval for "every N". */
+    sortKey: string;
     owner: string;
     reviewer: string;
     active: boolean;
-    state: RoutineState;
-    /** Today's task, or the open one it waits on. */
-    current: Task | null;
-    /** The last runs, newest first. */
-    history: Task[];
-    /** Next due day after today (YYYY-MM-DD), or null when paused. */
-    next: string | null;
-    /** Days since the oldest still-open run was made (0 when none is open). */
-    lateDays: number;
-    /** Its schedule falls on today. */
-    dueToday: boolean;
+    status: Omit<Status, 'next' | 'missed'> & { next: string | null };
+    runs: {
+        id: string;
+        status: string;
+        ran_at: string;
+        note: string | null;
+        agent: string | null;
+        task_id: string | null;
+    }[];
 };
 
-export type Cockpit = {
-    routines: RoutineView[];
-    dueToday: number;
-    doneToday: number;
-    open: number;
-    late: number;
-    /** Share of the last 7 days' runs that are done (null without runs). */
-    weekRate: number | null;
-};
-
-const OPEN = (t: Task) => t.status !== 'approved' && t.status !== 'rejected';
-
-const stateOf = (t: Task): RoutineState =>
-    t.status === 'approved'
-        ? 'done'
-        : t.status === 'review' || t.status === 'peer_review'
-          ? 'review'
-          : t.status === 'in_progress'
-            ? 'working'
-            : t.status === 'blocked'
-              ? 'blocked'
-              : t.status === 'changes_requested'
-                ? 'changes'
-                : 'todo';
-
-/** One project's routines as the cockpit shows them: today's state, recent runs, what's next, and the day's totals. */
-export async function getCockpit(projectSlug: string, now = new Date()): Promise<Cockpit> {
-    const { data, error } = await db()
-        .from('recurring')
-        .select(RECURRING_SELECT)
-        .eq('project.slug', projectSlug)
-        .order('created_at');
+/** Every routine (all projects) as the cockpit shows it. */
+export async function getRoutines(now = new Date()): Promise<RoutineView[]> {
+    const { data, error } = await db().from('recurring').select(RECURRING_SELECT).order('created_at');
     if (error) throw new Error(error.message);
     const rows = data as RecurringRow[];
-    const runs = await getRuns(rows.map((r) => r.id));
+    const runs = await recentRuns(rows.map((r) => r.id));
 
-    const routines = rows.map((r): RoutineView => {
-        const today = dateIn(r.timezone, now);
-        const mine = runs.filter((t) => t.recurringId === r.id);
-        const todays = mine.find((t) => dateIn(r.timezone, new Date(t.createdAt)) === today) ?? null;
-        const oldestOpen = [...mine].reverse().find(OPEN) ?? null;
-        const lateDays = oldestOpen
-            ? Math.round(
-                  (utc(today).getTime() - utc(dateIn(r.timezone, new Date(oldestOpen.createdAt))).getTime()) /
-                      86_400_000
-              )
-            : 0;
-
-        let state: RoutineState;
-        if (!r.active) state = 'paused';
-        else if (todays) state = stateOf(todays);
-        else if (oldestOpen && lateDays > 0) state = 'late';
-        else if (dueOn(r, today)) state = 'due';
-        else state = 'not_today';
-
-        let next: string | null = null;
-        if (r.active)
-            for (let i = 1; i <= 400 && !next; i++) {
-                const d = new Date(utc(today).getTime() + i * 86_400_000).toISOString().slice(0, 10);
-                if (dueOn(r, d)) next = d;
-            }
+    return rows.map((r) => {
+        const mine = runs.get(r.id) ?? [];
+        const { next, missed: _m, ...status } = statusOf(r, mine, now);
 
         return {
             id: r.id,
+            project: r.project ?? { slug: '', name: '' },
             title: r.title,
             summary: r.summary ?? '',
+            description: r.description ?? '',
             schedule: describe(r),
+            frequency: frequencyOf(r),
+            sortKey: r.every === 'intraday' ? String(r.every_minutes ?? 0).padStart(5, '0') : (r.times[0] ?? '99:99'),
             owner: r.owner?.name ?? '',
             reviewer: r.reviewer?.name ?? '',
             active: r.active,
-            state,
-            current: todays ?? (state === 'late' ? oldestOpen : null),
-            history: mine.slice(0, 10),
-            next,
-            lateDays,
-            dueToday: r.active && dueOn(r, today)
+            status: { ...status, next: next?.toISOString() ?? null },
+            runs: mine.slice(0, 20).map((x) => ({
+                id: x.id,
+                status: x.status,
+                ran_at: x.ran_at,
+                note: x.note,
+                agent: x.agent?.name ?? null,
+                task_id: x.task_id
+            }))
         };
     });
-
-    const week = runs.filter((t) => now.getTime() - new Date(t.createdAt).getTime() < 7 * 86_400_000);
-    const active = routines.filter((r) => r.active);
-
-    return {
-        routines,
-        dueToday: active.filter((r) => r.dueToday).length,
-        doneToday: active.filter((r) => r.state === 'done').length,
-        open: runs.filter(OPEN).length,
-        late: routines.filter((r) => r.lateDays > 0).length,
-        weekRate: week.length ? week.filter((t) => t.status === 'approved').length / week.length : null
-    };
 }

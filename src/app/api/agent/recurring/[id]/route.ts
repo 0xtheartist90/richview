@@ -2,13 +2,13 @@ import { agentsByName, authAgent, belongs, fail, fields, guarded, isUuid, parseB
 import {
     RECURRING_SELECT,
     type RecurringRow,
-    START_STATUSES,
     Schedule,
     apiRecurring,
-    dateIn,
+    recentRuns,
     scheduleColumns,
     validTimezone
 } from '@/lib/recurring';
+import { dateIn, statusOf } from '@/lib/schedule';
 import { db } from '@/lib/supabase';
 
 import { z } from 'zod';
@@ -25,12 +25,11 @@ const Patch = z
         domain: fields.domain.nullable().optional(),
         impact: fields.impact.nullable().optional(),
         effort: fields.effort.nullable().optional(),
-        start_status: z.enum(START_STATUSES, `one of ${START_STATUSES.join(', ')}`).optional(),
         owner: fields.owner.optional(),
         reviewer: fields.reviewer.nullable().optional(),
         schedule: Schedule.optional(),
+        grace_minutes: z.number().int().min(0).max(1440, 'at most 1440').nullable().optional(),
         timezone: z.string().refine(validTimezone, 'a timezone, e.g. Asia/Bangkok').optional(),
-        allow_overlap: z.boolean().optional(),
         /** false pauses it. */
         active: z.boolean().optional()
     })
@@ -43,7 +42,7 @@ async function row(id: string): Promise<RecurringRow | null> {
     return (data as RecurringRow | null) ?? null;
 }
 
-/** One recurring template (any project). */
+/** One routine (any project), with where it stands now and its runs of the last 8 days, newest first. */
 export async function GET(req: Request, { params }: Params) {
     return guarded(async () => {
         const me = await authAgent(req);
@@ -52,12 +51,28 @@ export async function GET(req: Request, { params }: Params) {
         if (!isUuid(id)) return fail(400, 'id: not a recurring id');
         const r = await row(id);
         if (!r) return fail(404, 'No such recurring task');
+        const runs = (await recentRuns([r.id])).get(r.id) ?? [];
 
-        return Response.json({ recurring: apiRecurring(r) });
+        return Response.json({
+            recurring: apiRecurring(
+                r,
+                statusOf(r, runs),
+                runs.find((x) => x.status !== 'missed')
+            ),
+            runs: runs.map((x) => ({
+                id: x.id,
+                status: x.status,
+                due_at: x.due_at,
+                ran_at: x.ran_at,
+                note: x.note,
+                agent: x.agent?.name ?? null,
+                review_task: x.task_id
+            }))
+        });
     });
 }
 
-/** Changes a template in a project the caller writes in; `active: false` pauses it. Tasks already made stay as they are. */
+/** Changes a routine in a project the caller writes in (title, summary, description, schedule with times, …); `active: false` pauses it. */
 export async function PATCH(req: Request, { params }: Params) {
     return guarded(async () => {
         const me = await authAgent(req);
@@ -104,7 +119,7 @@ export async function PATCH(req: Request, { params }: Params) {
     });
 }
 
-/** Removes a template from a project the caller writes in. Tasks already made stay (without the repeat mark's link). */
+/** Removes a routine from a project the caller writes in, with its run history. Review cards it raised stay. */
 export async function DELETE(req: Request, { params }: Params) {
     return guarded(async () => {
         const me = await authAgent(req);
