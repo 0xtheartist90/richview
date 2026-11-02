@@ -281,9 +281,8 @@ export async function checkRoutines(now = new Date()): Promise<{ late: string[] 
     const late: string[] = [];
 
     for (const r of rows) {
-        // A routine doesn't owe runs from before it existed (or before it last changed).
-        const since = Math.max(new Date(r.created_at).getTime(), new Date(r.updated_at).getTime());
-        const missed = statusOf(r, runs.get(r.id) ?? [], now).missed.filter((d) => d.getTime() > since);
+        // statusOf leaves out due times from before the routine existed.
+        const missed = statusOf(r, runs.get(r.id) ?? [], now).missed;
         if (!missed.length) continue;
         const noted = new Set(
             (runs.get(r.id) ?? []).filter((x) => x.status === 'missed').map((x) => new Date(x.due_at!).getTime())
@@ -330,6 +329,7 @@ export type RoutineView = {
         id: string;
         status: string;
         ran_at: string;
+        due_at: string | null;
         note: string | null;
         agent: string | null;
         task_id: string | null;
@@ -364,6 +364,7 @@ export async function getRoutines(now = new Date()): Promise<RoutineView[]> {
                 id: x.id,
                 status: x.status,
                 ran_at: x.ran_at,
+                due_at: x.due_at,
                 note: x.note,
                 agent: x.agent?.name ?? null,
                 task_id: x.task_id

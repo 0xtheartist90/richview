@@ -16,6 +16,8 @@ export type Rule = {
     grace_minutes: number | null;
     timezone: string;
     active: boolean;
+    /** When the routine was made: due times before it don't count. */
+    created_at?: string;
 };
 
 export type RunLike = { status: 'ok' | 'failed' | 'missed'; ran_at: string; due_at: string | null };
@@ -193,8 +195,12 @@ export function statusOf(r: Rule, runs: RunLike[], now = new Date()): Status {
     const today = dateIn(r.timezone, now);
     const startToday = zoned(today, '00:00', r.timezone).getTime();
 
-    const todays = coverage(r, dueTimes(r, today), ok);
-    const passed = todays.filter((d) => d.at.getTime() + grace <= t);
+    const born = r.created_at ? new Date(r.created_at).getTime() : -Infinity;
+    // A due time counts once a run covered it, or once its grace is over; none from before the routine existed.
+    const settled = (d: { at: Date; covered: boolean }) =>
+        d.at.getTime() > born && d.at.getTime() <= t && (d.covered || d.at.getTime() + grace <= t);
+    const todays = coverage(r, dueTimes(r, today), ok).filter((d) => d.at.getTime() > born);
+    const passed = todays.filter(settled);
     const remaining = todays.length - passed.length;
     const missedToday = passed.filter((d) => !d.covered).length;
 
@@ -204,13 +210,13 @@ export function statusOf(r: Rule, runs: RunLike[], now = new Date()): Status {
     let hit = 0;
     for (let i = 6; i >= 0; i--) {
         const date = addDays(today, -i);
-        const cov = coverage(r, dueTimes(r, date), ok).filter((d) => d.at.getTime() + grace <= t);
+        const cov = coverage(r, dueTimes(r, date), ok).filter(settled);
         spark.push(cov.length ? cov.filter((d) => d.covered).length / cov.length : null);
         total += cov.length;
         hit += cov.filter((d) => d.covered).length;
     }
 
-    const last2 = coverage(r, dueBetween(r, t - 2 * DAY, t), ok).filter((d) => d.at.getTime() + grace <= t);
+    const last2 = coverage(r, dueBetween(r, t - 2 * DAY, t), ok).filter(settled);
     const missed = last2.filter((d) => !d.covered).map((d) => d.at);
 
     let next: Date | null = null;

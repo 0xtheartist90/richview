@@ -337,8 +337,8 @@ function Kpi({
 function Spark({ values, className }: { values: (number | null)[]; className?: string }) {
     const pts = values.map((v, i) => (v === null ? null : ([(i / 6) * 60, 18 - v * 16] as const)));
     const known = pts.filter((p): p is readonly [number, number] => !!p);
-    if (known.length < 2)
-        return <span className={cn('label-xs block text-white/25', className)}>{known.length ? '' : 'no runs'}</span>;
+    // Too few days to draw a line: the percentage next to it says enough.
+    if (known.length < 2) return null;
     const d = known.map(([x, y], i) => `${i ? 'L' : 'M'}${x.toFixed(1)},${y.toFixed(1)}`).join(' ');
 
     return (
@@ -568,9 +568,16 @@ function Details({ routine: r }: { routine: RoutineView }) {
                                     className='mt-1.5 size-1.5 shrink-0 rounded-full'
                                     style={{ background: RUN_HEX[x.status] }}
                                 />
-                                <span className='readout w-28 shrink-0 text-white/55'>{when(x.ran_at)}</span>
+                                {/* A missed one shows the due time nobody covered; a reported one when it ran. */}
+                                <span className='readout w-28 shrink-0 text-white/55'>
+                                    {when(x.status === 'missed' ? x.due_at : x.ran_at)}
+                                </span>
                                 <span className='min-w-0 text-white/75'>
-                                    {x.status === 'missed' ? 'Missed' : x.status === 'failed' ? 'Failed' : 'Ok'}
+                                    {x.status === 'missed'
+                                        ? 'Missed · sent to Review'
+                                        : x.status === 'failed'
+                                          ? 'Failed'
+                                          : 'Ok'}
                                     {x.agent && <span className='text-white/40'> · {x.agent}</span>}
                                     {x.note && <span className='block truncate text-white/50'>{x.note}</span>}
                                 </span>
