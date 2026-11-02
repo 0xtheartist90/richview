@@ -11,11 +11,12 @@ import { domainHex } from '@/components/review/parts';
 import type { ProjectSummary } from '@/lib/tasks';
 import { cn } from '@/lib/utils';
 
-import { Layers, LayoutList } from 'lucide-react';
+import { Bot, Layers, LayoutList } from 'lucide-react';
 
 const PAGES = [
     { href: '/review', label: 'Review', icon: Layers },
-    { href: '/board', label: 'Board', icon: LayoutList }
+    { href: '/board', label: 'Board', icon: LayoutList },
+    { href: '/agents', label: 'Agents', icon: Bot }
 ];
 
 /** "richview" as a wordmark: light, lowercase, widely spaced, "view" in gold. */
@@ -123,10 +124,10 @@ export function Shell({ projects, children }: { projects: ProjectSummary[]; chil
                 {children}
             </main>
 
-            {/* The two pages, one tap away on a phone. */}
+            {/* The pages, one tap away on a phone. */}
             <nav
                 aria-label='Pages'
-                className='dark-panel fixed inset-x-0 bottom-0 z-50 grid grid-cols-2 border-t border-white/[0.08] bg-[var(--sidebar-bg)]/95 px-1 pt-1.5 pb-[max(0.4rem,env(safe-area-inset-bottom))] backdrop-blur-xl lg:hidden'>
+                className='dark-panel fixed inset-x-0 bottom-0 z-50 grid grid-cols-3 border-t border-white/[0.08] bg-[var(--sidebar-bg)]/95 px-1 pt-1.5 pb-[max(0.4rem,env(safe-area-inset-bottom))] backdrop-blur-xl lg:hidden'>
                 {PAGES.map(({ href, label, icon: Icon }) => {
                     const on = path.startsWith(href);
 

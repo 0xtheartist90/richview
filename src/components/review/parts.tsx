@@ -2,7 +2,7 @@
 import { STATUS_META, type Task } from '@/lib/task-types';
 import { cn } from '@/lib/utils';
 
-import { Sparkles } from 'lucide-react';
+import { ShieldCheck, Sparkles, UserCheck } from 'lucide-react';
 
 /** One colour per domain: the card's glow, its chip and the hero when there's no image. */
 const DOMAIN_HEX: Record<string, string> = {
@@ -51,6 +51,7 @@ export function TaskChips({ task, status, className }: { task: Task; status?: bo
             <Chip>{task.project.name}</Chip>
             {PRIORITY_HEX[task.priority] && <Chip hex={PRIORITY_HEX[task.priority]}>{task.priority}</Chip>}
             {task.returned && <Chip hex='#f59e0b'>returned</Chip>}
+            <PeerChip task={task} />
             {task.domain && <Chip hex={domainHex(task.domain)}>{task.domain}</Chip>}
             {task.impact && (
                 <Chip>
@@ -115,5 +116,20 @@ export function Hero({ task, className }: { task: Task; className?: string }) {
             }}>
             <Sparkles className='size-16 opacity-60' style={{ color: hex }} strokeWidth={1.25} />
         </div>
+    );
+}
+
+/** Who peer-checks the work: "peer checked · Neo" once done, "reviewer · Neo" while it waits. */
+export function PeerChip({ task }: { task: Task }) {
+    if (!task.reviewer) return null;
+
+    return task.peerCheckedAt ? (
+        <Chip hex='#34d399'>
+            <ShieldCheck className='size-3.5' /> peer checked · {task.reviewer}
+        </Chip>
+    ) : (
+        <Chip hex='#5fb8c2'>
+            <UserCheck className='size-3.5' /> reviewer · {task.reviewer}
+        </Chip>
     );
 }

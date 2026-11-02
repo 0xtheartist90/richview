@@ -14,7 +14,7 @@ import { DESK_ORDER, PHONE_ORDER, STATUS_META, type Task, type TaskStatus } from
 import type { ProjectSummary } from '@/lib/tasks';
 import { cn } from '@/lib/utils';
 
-import { ArrowRight, ChevronDown, Flag, RotateCcw } from 'lucide-react';
+import { ArrowRight, ChevronDown, Flag, RotateCcw, ShieldCheck, UserCheck } from 'lucide-react';
 
 /** Done work starts folded away on a phone. */
 const FOLDED: TaskStatus[] = ['approved'];
@@ -149,7 +149,7 @@ export function Board({
             </div>
 
             {/* Desktop: every status a column, left to right as a task goes. */}
-            <div className='no-scrollbar mt-5 hidden auto-cols-[minmax(10.5rem,1fr)] grid-flow-col items-start gap-3 overflow-x-auto pb-2 lg:grid'>
+            <div className='mt-5 hidden auto-cols-[minmax(10.5rem,1fr)] grid-flow-col items-start gap-3 overflow-x-auto pb-2 lg:grid'>
                 {DESK_ORDER.map((s) => (
                     <StatusPanel key={s} status={s} tasks={of(s)} column onOpen={setOpen} />
                 ))}
@@ -334,7 +334,9 @@ function Row({ task, onOpen }: { task: Task; onOpen: () => void }) {
                 aria-hidden
             />
             <span className='min-w-0 flex-1'>
-                <span className='line-clamp-2 text-[14.5px] leading-snug font-medium lg:line-clamp-3'>{task.title}</span>
+                <span className='line-clamp-2 text-[14.5px] leading-snug font-medium lg:line-clamp-3'>
+                    {task.title}
+                </span>
                 <span className='mt-1.5 flex items-center gap-2 text-xs text-white/50'>
                     {task.owner && (
                         <span className='inline-flex min-w-0 items-center gap-1.5'>
@@ -346,6 +348,18 @@ function Row({ task, onOpen }: { task: Task; onOpen: () => void }) {
                     {PRIORITY_HEX[task.priority] && (
                         <Flag className='size-3.5 shrink-0' style={{ color: PRIORITY_HEX[task.priority] }} />
                     )}
+                    {task.reviewer &&
+                        (task.peerCheckedAt ? (
+                            <ShieldCheck
+                                className='size-3.5 shrink-0 text-emerald-300'
+                                aria-label={`Peer checked by ${task.reviewer}`}
+                            />
+                        ) : (
+                            <UserCheck
+                                className='size-3.5 shrink-0 text-[#5fb8c2]'
+                                aria-label={`Reviewer: ${task.reviewer}`}
+                            />
+                        ))}
                     {task.returned && (
                         <RotateCcw className='size-3.5 shrink-0 text-[var(--bronze)]' aria-label='Returned' />
                     )}
