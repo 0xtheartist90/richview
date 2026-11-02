@@ -317,6 +317,8 @@ export type RoutineView = {
     title: string;
     summary: string;
     description: string;
+    /** Its kind (finance, ops, …): the routine's domain, or '' when none is set. */
+    domain: string;
     schedule: string;
     frequency: Frequency;
     /** Sort key within a section: the first time of day (HH:MM), or the interval for "every N". */
@@ -353,6 +355,7 @@ export async function getRoutines(now = new Date()): Promise<RoutineView[]> {
             title: r.title,
             summary: r.summary ?? '',
             description: r.description ?? '',
+            domain: (r.domain ?? '').trim().toLowerCase(),
             schedule: describe(r),
             frequency: frequencyOf(r),
             sortKey: r.every === 'intraday' ? String(r.every_minutes ?? 0).padStart(5, '0') : (r.times[0] ?? '99:99'),

@@ -74,13 +74,14 @@ async function returnedOf(ids: string[]): Promise<Set<string>> {
     return returned;
 }
 
-/** The review stack, all projects: the ones sent back and returned first, then by priority, then oldest first. */
-export async function getQueue(): Promise<Task[]> {
-    const { data, error } = await db()
-        .from('tasks')
-        .select(SELECT)
-        .eq('status', 'review')
-        .order('created_at', { ascending: true });
+/**
+ * A stack to swipe, all projects: Review (returned ones first) or Planned; then by priority, then oldest first.
+ */
+export async function getQueue(status: 'review' | 'planned' = 'review'): Promise<Task[]> {
+    let q = db().from('tasks').select(SELECT).eq('status', status).order('created_at', { ascending: true });
+    // Planned is the board's work to start; routine alerts only ever wait in Review.
+    if (status === 'planned') q = q.is('recurring_id', null);
+    const { data, error } = await q;
     if (error) throw new Error(error.message);
     const rows = data as Row[];
     const returned = await returnedOf(rows.filter((r) => r.status === 'review').map((r) => r.id));

@@ -16,6 +16,7 @@ export function PreviewSheet({
     onClose,
     onApprove,
     onChanges,
+    labels,
     children
 }: {
     task: Task | null;
@@ -23,6 +24,8 @@ export function PreviewSheet({
     /** Left out (the board): no verdict buttons. */
     onApprove?: () => void;
     onChanges?: () => void;
+    /** Other words on the verdict buttons (the Planned stack: Turn down / Start). */
+    labels?: { no: string; yes: string };
     /** Under the card's details (the board's Manage panel). */
     children?: React.ReactNode;
 }) {
@@ -39,7 +42,7 @@ export function PreviewSheet({
                     exit={{ y: '100%' }}
                     transition={{ type: 'spring', damping: 32, stiffness: 320 }}
                     className='fixed inset-0 z-[60] flex flex-col bg-[var(--canvas)]'>
-                    <Body task={task} onClose={onClose} onApprove={onApprove} onChanges={onChanges}>
+                    <Body task={task} onClose={onClose} onApprove={onApprove} onChanges={onChanges} labels={labels}>
                         {children}
                     </Body>
                 </motion.div>
@@ -53,12 +56,14 @@ function Body({
     onClose,
     onApprove,
     onChanges,
+    labels,
     children
 }: {
     task: Task;
     onClose: () => void;
     onApprove?: () => void;
     onChanges?: () => void;
+    labels?: { no: string; yes: string };
     children?: React.ReactNode;
 }) {
     const [slide, setSlide] = useState(0);
@@ -201,12 +206,12 @@ function Body({
                     <button
                         onClick={onChanges}
                         className='inline-flex h-12 flex-1 items-center justify-center gap-2 rounded-xl border border-rose-500/40 bg-rose-500/10 font-semibold text-rose-400'>
-                        <X className='size-5' /> Changes
+                        <X className='size-5' /> {labels?.no ?? 'Changes'}
                     </button>
                     <button
                         onClick={onApprove}
                         className='inline-flex h-12 flex-1 items-center justify-center gap-2 rounded-xl border border-emerald-500/40 bg-emerald-500/15 font-semibold text-emerald-400'>
-                        <Check className='size-5' /> Approve
+                        <Check className='size-5' /> {labels?.yes ?? 'Approve'}
                     </button>
                 </div>
             )}
