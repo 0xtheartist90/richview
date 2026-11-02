@@ -8,7 +8,7 @@ export async function GET(req: Request) {
         if (me instanceof Response) return me;
         const { data, error } = await db()
             .from('agents')
-            .select('id, name, is_lead, project:projects(slug)')
+            .select('id, name, is_lead, project:projects!project_id(slug)')
             .eq('active', true)
             .order('name');
         if (error) throw new Error(error.message);

@@ -34,7 +34,7 @@ export default async function AgentsPage() {
         db()
             .from('agents')
             .select(
-                'id, name, is_lead, active, api_key_hash, webhook_url, project:projects(slug), lead_projects(project:projects(slug))'
+                'id, name, is_lead, active, api_key_hash, webhook_url, project:projects!project_id(slug), lead_projects(project:projects(slug))'
             )
             .order('name'),
         db().from('projects').select('slug, name').is('archived_at', null).order('created_at')
