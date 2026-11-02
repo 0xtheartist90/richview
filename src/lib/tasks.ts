@@ -1,6 +1,7 @@
 // Tasks in and out of Supabase. Server only.
 import { db } from '@/lib/supabase';
 import type { DecisionAction, Task, TaskStatus } from '@/lib/task-types';
+import type { Change } from '@/lib/webhooks';
 
 import 'server-only';
 
@@ -42,6 +43,7 @@ const toTask = (r: Row, returned: Set<string>): Task => ({
     reviewer: r.reviewer?.name ?? '',
     peerCheckedAt: r.peer_checked_at,
     recurring: !!r.recurring_id,
+    recurringId: r.recurring_id,
     project: r.project,
     impact: (r.impact ?? '').replace('_', ' '),
     effort: r.effort ?? '',
@@ -89,6 +91,7 @@ export async function getQueue(): Promise<Task[]> {
 }
 
 export type ProjectSummary = {
+    id: string;
     slug: string;
     name: string;
     wipLimit: number;
@@ -104,20 +107,23 @@ export type ProjectSummary = {
 export async function getProjects(): Promise<ProjectSummary[]> {
     const [projects, tasks] = await Promise.all([
         db().from('projects').select('id, slug, name, wip_limit').is('archived_at', null).order('created_at'),
-        db().from('tasks').select('project_id, status').not('status', 'in', '(approved,rejected)')
+        db().from('tasks').select('project_id, status, recurring_id').not('status', 'in', '(approved,rejected)')
     ]);
     if (projects.error) throw new Error(projects.error.message);
     if (tasks.error) throw new Error(tasks.error.message);
 
     return projects.data.map((p) => {
-        const mine = tasks.data.filter((t) => t.project_id === p.id);
+        const all = tasks.data.filter((t) => t.project_id === p.id);
+        // The board's numbers leave routine runs out (they're on the Routines cockpit); Review counts everything.
+        const mine = all.filter((t) => !t.recurring_id);
 
         return {
+            id: p.id as string,
             slug: p.slug as string,
             name: p.name as string,
             wipLimit: p.wip_limit as number,
             open: mine.length,
-            review: mine.filter((t) => t.status === 'review').length,
+            review: all.filter((t) => t.status === 'review').length,
             blocked: mine.filter((t) => t.status === 'blocked').length,
             working: mine.filter((t) => t.status === 'in_progress').length
         };
@@ -127,13 +133,17 @@ export async function getProjects(): Promise<ProjectSummary[]> {
 /** Done work stays on the board this long after it was last touched. */
 const DONE_DAYS = 14;
 
-/** One project's tasks, newest change first: everything open, and what was approved (done) lately. */
+/**
+ * One project's tasks, newest change first: everything open, and what was approved (done) lately. Routine runs aren't
+ * here: they're on the Routines cockpit.
+ */
 export async function getBoard(project: string): Promise<Task[]> {
     const since = new Date(Date.now() - DONE_DAYS * 86_400_000).toISOString();
     const { data, error } = await db()
         .from('tasks')
         .select(SELECT)
         .eq('project.slug', project)
+        .is('recurring_id', null)
         .neq('status', 'rejected')
         .or(`status.neq.approved,updated_at.gte.${since}`)
         .order('updated_at', { ascending: false });
@@ -206,4 +216,141 @@ export async function decide(id: string, action: DecisionAction, comment?: strin
         action,
         comment: comment ?? null
     };
+}
+
+/** What Richie can change on a card from the board. */
+export type RichieEdit = {
+    status?: TaskStatus;
+    title?: string;
+    summary?: string | null;
+    priority?: Task['priority'];
+    ownerId?: string;
+    comment?: string;
+};
+
+/** Statuses that are Richie's verdicts: set from the board too, they land in the decision feed like a swipe. */
+const VERDICTS: Partial<Record<TaskStatus, DecisionAction>> = {
+    approved: 'approved',
+    changes_requested: 'changes_requested',
+    rejected: 'rejected'
+};
+
+/**
+ * Richie's change to a card from the board: move it (any status; Done, Changes requested and Archive are verdicts
+ * and go to the decision feed), rename it, give it to another agent, change its priority, and say why in a comment.
+ * Null when there's no such task.
+ */
+export async function editTask(
+    id: string,
+    e: RichieEdit
+): Promise<{ decision: Decision | null; change: Change | null } | null> {
+    const { data: before, error } = await db()
+        .from('tasks')
+        .select('id, title, summary, status, priority, owner_id, project_id, project:projects(slug)')
+        .eq('id', id)
+        .maybeSingle();
+    if (error) throw new Error(error.message);
+    if (!before) return null;
+    const project = (before.project as unknown as { slug: string } | null)?.slug ?? '';
+
+    const update: Record<string, unknown> = {};
+    const changes: Record<string, [unknown, unknown]> = {};
+    const set = (field: string, column: string, value: unknown) => {
+        if (value === undefined || value === before[column as keyof typeof before]) return;
+        update[column] = value;
+        changes[field] = [before[column as keyof typeof before], value];
+    };
+    set('title', 'title', e.title);
+    set('summary', 'summary', e.summary);
+    set('priority', 'priority', e.priority);
+    set('owner', 'owner_id', e.ownerId);
+    set('status', 'status', e.status);
+    const verdict = e.status && e.status !== before.status ? VERDICTS[e.status] : undefined;
+    if (verdict === 'approved') update.reviewed_at = new Date().toISOString();
+
+    if (Object.keys(update).length) {
+        const u = await db().from('tasks').update(update).eq('id', id);
+        if (u.error) throw new Error(u.error.message);
+    }
+    if (e.comment) {
+        const c = await db().from('comments').insert({ task_id: id, body: e.comment });
+        if (c.error) throw new Error(c.error.message);
+    }
+
+    const ownerId = (update.owner_id as string | undefined) ?? (before.owner_id as string | null);
+    const title = (update.title as string | undefined) ?? (before.title as string);
+    let decision: Decision | null = null;
+    if (verdict) {
+        const d = await db()
+            .from('decisions')
+            .insert({ task_id: id, agent_id: ownerId, action: verdict, comment: e.comment ?? null })
+            .select('seq')
+            .single();
+        if (d.error) throw new Error(d.error.message);
+        decision = {
+            seq: d.data.seq as number,
+            taskId: id,
+            title,
+            project,
+            projectId: before.project_id as string,
+            agentId: ownerId,
+            action: verdict,
+            comment: e.comment ?? null
+        };
+    }
+    // Anything besides a verdict (or a verdict with other edits) is a plain change the agents hear about.
+    const other = Object.keys(changes).filter((k) => !(verdict && k === 'status'));
+    const change: Change | null =
+        other.length || (!verdict && e.comment)
+            ? {
+                  event: 'task_updated',
+                  taskId: id,
+                  project,
+                  projectId: before.project_id as string,
+                  title,
+                  ownerId,
+                  previousOwnerId: changes.owner ? (before.owner_id as string | null) : null,
+                  changes: Object.fromEntries(other.map((k) => [k, changes[k]])),
+                  comment: verdict ? null : (e.comment ?? null)
+              }
+            : null;
+
+    return { decision, change };
+}
+
+/** Deletes a card for good (its comments and decisions go with it); null when there's none. */
+export async function deleteTask(id: string): Promise<Change | null> {
+    const { data, error } = await db()
+        .from('tasks')
+        .delete()
+        .eq('id', id)
+        .select('id, title, owner_id, project_id, project:projects(slug)')
+        .maybeSingle();
+    if (error) throw new Error(error.message);
+    if (!data) return null;
+
+    return {
+        event: 'task_deleted',
+        taskId: id,
+        project: (data.project as unknown as { slug: string } | null)?.slug ?? '',
+        projectId: data.project_id as string,
+        title: data.title as string,
+        ownerId: (data.owner_id as string | null) ?? null
+    };
+}
+
+/** The tasks these routines made in the last `days` days, newest first (for the Routines cockpit). */
+export async function getRuns(recurringIds: string[], days = 30): Promise<Task[]> {
+    if (!recurringIds.length) return [];
+    const since = new Date(Date.now() - days * 86_400_000).toISOString();
+    const { data, error } = await db()
+        .from('tasks')
+        .select(SELECT)
+        .in('recurring_id', recurringIds)
+        .neq('status', 'rejected')
+        .gte('created_at', since)
+        .order('created_at', { ascending: false });
+    if (error) throw new Error(error.message);
+
+    return (data as Row[]).map((r) => toTask(r, new Set()));
 }

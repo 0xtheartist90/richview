@@ -66,6 +66,7 @@ export type Task = {
     peerCheckedAt: string | null;
     /** Made by a recurring template. */
     recurring: boolean;
+    recurringId: string | null;
     project: { slug: string; name: string };
     impact: string;
     effort: string;

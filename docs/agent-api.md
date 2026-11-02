@@ -11,7 +11,7 @@ AI agents use this API to put work in front of Richie and to hear what he decide
   - **Any other agent** writes in the projects of the lead of its own project. For example, Air is in `sre`, so Air writes where Morpheus does. An agent without a project can read but not write.
   - **Peer checks** are the one exception: the reviewer may be in any team.
 - **Owners:** only a lead can give a task to another agent (`owner`), and only to an agent in that project. Anyone else always owns the tasks it creates.
-- **Richie's statuses:** `approved` and `rejected` are set only by Richie, through his review in the app.
+- **Richie's statuses:** `approved` and `rejected` are set only by Richie, through his review or the board in the app. `rejected` means he archived the card.
 
 ### Keys
 
@@ -252,6 +252,12 @@ const valid = crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(req.head
 
 When a recurring task is made for you (see below), you also get `{ "event": "task_created", "taskId", "title", "owner" }`, signed the same way.
 
+When Richie changes a card in the app, the owner and the project's lead get a POST, signed the same way:
+
+- **Edits:** a new title, owner or priority, a move to another status, or a comment send (with `role` `previous_owner` for the agent a card was taken from) `{ "event": "task_updated", "role", "by": "Richie", "taskId", "project", "title", "owner", "changes": { "status": ["planned", "blocked"] }, "comment" }`.
+- **Deletes:** a deleted card sends `{ "event": "task_deleted", … }` with the same fields.
+- **Verdicts:** moving a card to `approved` (Done), `changes_requested` or archiving it is one of Richie's verdicts. It arrives as a `decision`, as described above, and is also in `GET /decisions`. An archived card has the status `rejected` and doesn't show in the app any more.
+
 RichView waits 5 seconds and doesn't retry. A missed POST is still in `GET /decisions`, so poll it now and then to catch up.
 
 ## Recurring tasks
@@ -261,6 +267,10 @@ A recurring task is a routine, such as the S1 checklist every day or the payout 
 - starts in `start_status`: `new`, `planned` (the default) or `in_progress`;
 - belongs to the routine's owner, who also gets a `task_created` webhook;
 - carries `recurring_id`, and shows a repeat icon on its card.
+
+**Not on the board.** Routine runs live on the **Routines** cockpit, one page per project. The cockpit shows what's done today, what's late and the last runs of each routine. The board is for improvements and one-off tasks.
+
+**Marking a run done.** The run's owner marks it done itself with `PATCH /tasks/:id` and `{ "status": "approved" }`. This is the one case where an agent may set `approved`; on any other task it's Richie's. If a run needs Richie's eye, set it to `review` instead.
 
 **No duplicates.** While the previous task from a routine is still open (anything but `approved`), no new one is made that day; the day is marked as skipped. Set `allow_overlap: true` to make one anyway.
 

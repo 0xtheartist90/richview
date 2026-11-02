@@ -16,7 +16,7 @@ import { Bot, Layers, LayoutList, Repeat } from 'lucide-react';
 const PAGES = [
     { href: '/review', label: 'Review', icon: Layers },
     { href: '/board', label: 'Board', icon: LayoutList },
-    { href: '/recurring', label: 'Recurring', icon: Repeat },
+    { href: '/routines', label: 'Routines', icon: Repeat },
     { href: '/agents', label: 'Agents', icon: Bot }
 ];
 
@@ -45,8 +45,10 @@ export function Shell({ projects, children }: { projects: ProjectSummary[]; chil
     const path = usePathname();
     const params = useSearchParams();
     const toReview = projects.reduce((n, p) => n + p.review, 0);
-    const onBoard = path.startsWith('/board');
-    const current = onBoard ? (params.get('project') ?? projects[0]?.slug) : null;
+    // The sidebar's projects open the page you're on (Board or Routines), for that project.
+    const page = path.startsWith('/routines') ? '/routines' : '/board';
+    const perProject = path.startsWith('/board') || path.startsWith('/routines');
+    const current = perProject ? (params.get('project') ?? projects[0]?.slug) : null;
 
     return (
         <div className='min-h-dvh lg:pl-60'>
@@ -94,7 +96,7 @@ export function Shell({ projects, children }: { projects: ProjectSummary[]; chil
                                 return (
                                     <Link
                                         key={p.slug}
-                                        href={`/board?project=${p.slug}`}
+                                        href={`${page}?project=${p.slug}`}
                                         aria-current={active ? 'page' : undefined}
                                         className={cn(
                                             'flex items-center gap-2.5 rounded-lg px-2.5 py-[7px] text-[14.5px] font-medium transition-colors hover:bg-white/[0.04] hover:text-white',

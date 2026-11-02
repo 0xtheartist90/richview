@@ -1,6 +1,8 @@
 // Recurring work: templates that turn into ordinary tasks on their days. The daily cron (and Richie's "Run now")
 // calls runRecurring; agents manage templates through /api/agent/recurring. Server only.
 import { db } from '@/lib/supabase';
+import type { Task } from '@/lib/task-types';
+import { getRuns } from '@/lib/tasks';
 import { notifyNewTask } from '@/lib/webhooks';
 
 import 'server-only';
@@ -186,7 +188,8 @@ export type RunResult = { created: { template: string; task: string }[]; skipped
 /**
  * Turns every active template that's due today (in its own timezone) and hasn't run today into a task. While the
  * previous task from a template is still open, nothing new is made (unless the template allows overlap); that day is
- * marked as skipped. Safe to call more than once a day.
+ * marked as skipped; once that task is done, a later call the same day makes today's after all. Safe to call more than
+ * once a day.
  */
 export async function runRecurring(now = new Date()): Promise<RunResult> {
     const { data, error } = await db().from('recurring').select('*').eq('active', true);
@@ -195,11 +198,14 @@ export async function runRecurring(now = new Date()): Promise<RunResult> {
 
     for (const r of data as RecurringRow[]) {
         const today = dateIn(r.timezone, now);
-        if (r.last_run_on === today || !dueOn(r, today)) continue;
+        // A day that was only skipped (the last task still open) may run again once that task is done.
+        const skippedToday = r.last_skipped_on === today;
+        if ((r.last_run_on === today && !skippedToday) || !dueOn(r, today)) continue;
         try {
             if (!r.allow_overlap && r.last_task_id) {
                 const prev = await db().from('tasks').select('status').eq('id', r.last_task_id).maybeSingle();
                 if (prev.data && !['approved', 'rejected'].includes(prev.data.status as string)) {
+                    if (skippedToday) continue;
                     // Claimed for today only if nobody else ran it in the meantime.
                     await db()
                         .from('recurring')
@@ -213,9 +219,9 @@ export async function runRecurring(now = new Date()): Promise<RunResult> {
             // Claim today first, so two runs at once can't both make a task.
             const claim = await db()
                 .from('recurring')
-                .update({ last_run_on: today })
+                .update({ last_run_on: today, last_skipped_on: null })
                 .eq('id', r.id)
-                .or(`last_run_on.is.null,last_run_on.lt.${today}`)
+                .or(`last_run_on.is.null,last_run_on.lt.${today},last_skipped_on.eq.${today}`)
                 .select('id')
                 .maybeSingle();
             if (claim.error) throw new Error(claim.error.message);
@@ -253,4 +259,132 @@ export async function runRecurring(now = new Date()): Promise<RunResult> {
     }
 
     return result;
+}
+
+// ---- The cockpit ------------------------------------------------------------------------------------------------
+
+/** Where a routine stands today. */
+export type RoutineState =
+    | 'done'
+    | 'review'
+    | 'working'
+    | 'todo'
+    | 'blocked'
+    | 'changes'
+    | 'late'
+    | 'due'
+    | 'not_today'
+    | 'paused';
+
+export type RoutineView = {
+    id: string;
+    title: string;
+    summary: string;
+    schedule: string;
+    owner: string;
+    reviewer: string;
+    active: boolean;
+    state: RoutineState;
+    /** Today's task, or the open one it waits on. */
+    current: Task | null;
+    /** The last runs, newest first. */
+    history: Task[];
+    /** Next due day after today (YYYY-MM-DD), or null when paused. */
+    next: string | null;
+    /** Days since the oldest still-open run was made (0 when none is open). */
+    lateDays: number;
+    /** Its schedule falls on today. */
+    dueToday: boolean;
+};
+
+export type Cockpit = {
+    routines: RoutineView[];
+    dueToday: number;
+    doneToday: number;
+    open: number;
+    late: number;
+    /** Share of the last 7 days' runs that are done (null without runs). */
+    weekRate: number | null;
+};
+
+const OPEN = (t: Task) => t.status !== 'approved' && t.status !== 'rejected';
+
+const stateOf = (t: Task): RoutineState =>
+    t.status === 'approved'
+        ? 'done'
+        : t.status === 'review' || t.status === 'peer_review'
+          ? 'review'
+          : t.status === 'in_progress'
+            ? 'working'
+            : t.status === 'blocked'
+              ? 'blocked'
+              : t.status === 'changes_requested'
+                ? 'changes'
+                : 'todo';
+
+/** One project's routines as the cockpit shows them: today's state, recent runs, what's next, and the day's totals. */
+export async function getCockpit(projectSlug: string, now = new Date()): Promise<Cockpit> {
+    const { data, error } = await db()
+        .from('recurring')
+        .select(RECURRING_SELECT)
+        .eq('project.slug', projectSlug)
+        .order('created_at');
+    if (error) throw new Error(error.message);
+    const rows = data as RecurringRow[];
+    const runs = await getRuns(rows.map((r) => r.id));
+
+    const routines = rows.map((r): RoutineView => {
+        const today = dateIn(r.timezone, now);
+        const mine = runs.filter((t) => t.recurringId === r.id);
+        const todays = mine.find((t) => dateIn(r.timezone, new Date(t.createdAt)) === today) ?? null;
+        const oldestOpen = [...mine].reverse().find(OPEN) ?? null;
+        const lateDays = oldestOpen
+            ? Math.round(
+                  (utc(today).getTime() - utc(dateIn(r.timezone, new Date(oldestOpen.createdAt))).getTime()) /
+                      86_400_000
+              )
+            : 0;
+
+        let state: RoutineState;
+        if (!r.active) state = 'paused';
+        else if (todays) state = stateOf(todays);
+        else if (oldestOpen && lateDays > 0) state = 'late';
+        else if (dueOn(r, today)) state = 'due';
+        else state = 'not_today';
+
+        let next: string | null = null;
+        if (r.active)
+            for (let i = 1; i <= 400 && !next; i++) {
+                const d = new Date(utc(today).getTime() + i * 86_400_000).toISOString().slice(0, 10);
+                if (dueOn(r, d)) next = d;
+            }
+
+        return {
+            id: r.id,
+            title: r.title,
+            summary: r.summary ?? '',
+            schedule: describe(r),
+            owner: r.owner?.name ?? '',
+            reviewer: r.reviewer?.name ?? '',
+            active: r.active,
+            state,
+            current: todays ?? (state === 'late' ? oldestOpen : null),
+            history: mine.slice(0, 10),
+            next,
+            lateDays,
+            dueToday: r.active && dueOn(r, today)
+        };
+    });
+
+    const week = runs.filter((t) => now.getTime() - new Date(t.createdAt).getTime() < 7 * 86_400_000);
+    const active = routines.filter((r) => r.active);
+
+    return {
+        routines,
+        dueToday: active.filter((r) => r.dueToday).length,
+        doneToday: active.filter((r) => r.state === 'done').length,
+        open: runs.filter(OPEN).length,
+        late: routines.filter((r) => r.lateDays > 0).length,
+        weekRate: week.length ? week.filter((t) => t.status === 'approved').length / week.length : null
+    };
 }
