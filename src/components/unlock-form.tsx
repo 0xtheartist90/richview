@@ -22,7 +22,7 @@ export function UnlockForm({ missing }: { missing: boolean }) {
 
     return (
         <form
-            className='flex flex-col gap-3 rounded-2xl border border-white/10 bg-white/[0.03] p-5'
+            className='bg-card panel flex flex-col gap-3 rounded-2xl border p-5 shadow-[var(--shadow-card)]'
             onSubmit={async (e) => {
                 e.preventDefault();
                 setBusy(true);
@@ -36,8 +36,9 @@ export function UnlockForm({ missing }: { missing: boolean }) {
                 if (res?.ok) return router.refresh();
                 setError(res?.status === 401 ? 'Wrong password' : 'Could not unlock, try again');
             }}>
-            <p className='flex items-center gap-2 font-semibold'>
-                <Lock className='size-4' /> RichView is locked
+            <p className='label-hud'>richview</p>
+            <p className='flex items-center gap-2 text-lg font-light'>
+                <Lock className='size-4 text-[var(--brand)]' /> Locked
             </p>
             <input
                 type='password'
@@ -47,12 +48,10 @@ export function UnlockForm({ missing }: { missing: boolean }) {
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder='Admin password'
                 aria-label='Admin password'
-                className='h-12 rounded-xl border border-white/10 bg-black/30 px-3 text-[16px] outline-none focus:ring-2 focus:ring-white/30'
+                className='track h-12 rounded-xl px-3 text-[16px] outline-none focus:ring-2 focus:ring-[var(--ring)]'
             />
             {error && <p className='text-sm text-rose-400'>{error}</p>}
-            <button
-                disabled={!password || busy}
-                className='h-12 rounded-xl bg-white font-semibold text-black disabled:opacity-40'>
+            <button disabled={!password || busy} className='btn-primary h-12 rounded-xl disabled:opacity-40'>
                 {busy ? 'Checking…' : 'Unlock'}
             </button>
         </form>

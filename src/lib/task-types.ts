@@ -1,15 +1,49 @@
 // What a task looks like to the pages (server and browser alike).
 
 export const TASK_STATUSES = [
-    'idea',
+    'new',
     'planned',
     'in_progress',
     'review',
-    'approved',
     'changes_requested',
+    'blocked',
+    'approved',
+    /** Old rows only: no longer shown or set. */
     'rejected'
 ] as const;
 export type TaskStatus = (typeof TASK_STATUSES)[number];
+
+/** Each status's label and colour (SRE's palette: gold is the work waiting for Richie). */
+export const STATUS_META: Record<TaskStatus, { label: string; hex: string; short?: string }> = {
+    new: { label: 'New', hex: '#c8ccd2' },
+    planned: { label: 'Planned', hex: '#7ea6d8' },
+    in_progress: { label: 'In progress', hex: '#a78bfa' },
+    review: { label: 'Review', hex: '#d4b062' },
+    changes_requested: { label: 'Changes requested', short: 'Changes', hex: '#c98a5a' },
+    blocked: { label: 'Blocked', hex: '#f43f5e' },
+    approved: { label: 'Done', hex: '#34d399' },
+    rejected: { label: 'Rejected', hex: '#6b7280' }
+};
+/** On a phone, top to bottom: what needs Richie first, then what's stuck, the work under way, and what's done. */
+export const PHONE_ORDER: TaskStatus[] = [
+    'review',
+    'changes_requested',
+    'blocked',
+    'in_progress',
+    'planned',
+    'new',
+    'approved'
+];
+/** On a desktop, the columns left to right: a task's life. */
+export const DESK_ORDER: TaskStatus[] = [
+    'new',
+    'planned',
+    'in_progress',
+    'review',
+    'changes_requested',
+    'blocked',
+    'approved'
+];
 
 export const DECISION_ACTIONS = ['approved', 'changes_requested', 'rejected', 'started'] as const;
 export type DecisionAction = (typeof DECISION_ACTIONS)[number];
@@ -34,4 +68,5 @@ export type Task = {
     /** Sent back before with changes requested, and back for review. */
     returned: boolean;
     createdAt: string;
+    updatedAt: string;
 };

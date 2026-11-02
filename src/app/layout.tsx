@@ -1,23 +1,23 @@
+import { Suspense } from 'react';
 import type { ReactNode } from 'react';
 
 import type { Metadata, Viewport } from 'next';
-import localFont from 'next/font/local';
-import Link from 'next/link';
+import { Montserrat } from 'next/font/google';
 
 import { ThemeProvider } from 'next-themes';
 
 import '@/app/globals.css';
+import { Shell } from '@/components/shell';
+import { adminOpen } from '@/lib/admin';
+import { type ProjectSummary, getProjects } from '@/lib/tasks';
 import { Toaster } from '@/registry/new-york-v4/ui/sonner';
 
-const geistSans = localFont({
-    src: './fonts/GeistVF.woff',
-    variable: '--font-geist-sans',
-    weight: '100 900'
-});
-const geistMono = localFont({
-    src: './fonts/GeistMonoVF.woff',
-    variable: '--font-geist-mono',
-    weight: '100 900'
+// Montserrat, SRE's typeface: light, geometric, generously spaced.
+const montserrat = Montserrat({
+    subsets: ['latin'],
+    weight: ['300', '400', '500', '600', '700'],
+    variable: '--font-montserrat',
+    display: 'swap'
 });
 
 export const metadata: Metadata = {
@@ -27,31 +27,37 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-    themeColor: '#09090b',
+    themeColor: '#1b1c20',
     width: 'device-width',
     initialScale: 1,
     viewportFit: 'cover'
 };
 
-const Layout = ({ children }: Readonly<{ children: ReactNode }>) => {
+/** The projects for the sidebar and the review count; none while locked or when the database can't be read. */
+async function sidebarProjects(): Promise<ProjectSummary[]> {
+    if (!(await adminOpen())) return [];
+    try {
+        return await getProjects();
+    } catch {
+        return [];
+    }
+}
+
+export default async function Layout({ children }: Readonly<{ children: ReactNode }>) {
+    const projects = await sidebarProjects();
+
     return (
         // ? https://github.com/pacocoursey/next-themes?tab=readme-ov-file#with-app
-        <html suppressHydrationWarning lang='en'>
-            <body
-                className={`${geistSans.variable} ${geistMono.variable} bg-[#09090b] text-white overscroll-none antialiased`}>
-                {/* Dark only for now: the cards are made for it. */}
+        <html suppressHydrationWarning lang='en' className='dark'>
+            <body className={`${montserrat.variable} overscroll-none antialiased`}>
+                {/* Dark only, as SRE: the cards and the gold are made for it. */}
                 <ThemeProvider attribute='class' forcedTheme='dark'>
-                    <header className='mx-auto flex h-14 max-w-md items-center px-4 pt-[env(safe-area-inset-top)]'>
-                        <Link href='/review' className='text-lg font-semibold tracking-tight'>
-                            RichView
-                        </Link>
-                    </header>
-                    <main className='px-4 pb-[max(1rem,env(safe-area-inset-bottom))]'>{children}</main>
+                    <Suspense>
+                        <Shell projects={projects}>{children}</Shell>
+                    </Suspense>
                     <Toaster position='top-center' />
                 </ThemeProvider>
             </body>
         </html>
     );
-};
-
-export default Layout;
+}

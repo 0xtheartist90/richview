@@ -1,8 +1,8 @@
 // Tasks in and out of Supabase. Server only.
-import 'server-only';
-
 import { db } from '@/lib/supabase';
 import type { DecisionAction, Task, TaskStatus } from '@/lib/task-types';
+
+import 'server-only';
 
 type Row = {
     id: string;
@@ -20,6 +20,7 @@ type Row = {
     after: string | null;
     context: string | null;
     created_at: string;
+    updated_at: string;
     owner: { name: string } | null;
     project: { slug: string; name: string };
 };
@@ -44,39 +45,97 @@ const toTask = (r: Row, returned: Set<string>): Task => ({
     after: r.after ?? '',
     context: r.context ?? '',
     returned: returned.has(r.id),
-    createdAt: r.created_at
+    createdAt: r.created_at,
+    updatedAt: r.updated_at
 });
 
 const PRIORITY = { urgent: 0, high: 1, normal: 2, low: 3 } as const;
 
-/**
- * The cards in a status, in the order they're swiped: the ones sent back and returned first, then by priority, then
- * oldest first. `project` narrows it to one project (its slug).
- */
-export async function getQueue(status: 'review' | 'planned', project?: string): Promise<Task[]> {
-    let q = db().from('tasks').select(SELECT).eq('status', status).order('created_at', { ascending: true });
-    if (project) q = q.eq('project.slug', project);
-    const { data, error } = await q;
+/** Which of these tasks were sent back with changes requested before (so a card back in Review shows as returned). */
+async function returnedOf(ids: string[]): Promise<Set<string>> {
+    const returned = new Set<string>();
+    if (!ids.length) return returned;
+    const { data, error } = await db()
+        .from('decisions')
+        .select('task_id')
+        .eq('action', 'changes_requested')
+        .in('task_id', ids);
+    if (error) throw new Error(error.message);
+    for (const d of data) returned.add(d.task_id as string);
+
+    return returned;
+}
+
+/** The review stack, all projects: the ones sent back and returned first, then by priority, then oldest first. */
+export async function getQueue(): Promise<Task[]> {
+    const { data, error } = await db()
+        .from('tasks')
+        .select(SELECT)
+        .eq('status', 'review')
+        .order('created_at', { ascending: true });
     if (error) throw new Error(error.message);
     const rows = data as Row[];
-
-    const returned = new Set<string>();
-    if (status === 'review' && rows.length) {
-        const sent = await db()
-            .from('decisions')
-            .select('task_id')
-            .eq('action', 'changes_requested')
-            .in(
-                'task_id',
-                rows.map((r) => r.id)
-            );
-        if (sent.error) throw new Error(sent.error.message);
-        for (const d of sent.data) returned.add(d.task_id as string);
-    }
+    const returned = await returnedOf(rows.filter((r) => r.status === 'review').map((r) => r.id));
 
     return rows
         .map((r) => toTask(r, returned))
         .sort((a, b) => Number(b.returned) - Number(a.returned) || PRIORITY[a.priority] - PRIORITY[b.priority]);
+}
+
+export type ProjectSummary = {
+    slug: string;
+    name: string;
+    wipLimit: number;
+    /** Tasks not yet done (anything but Approved). */
+    open: number;
+    /** Waiting for Richie. */
+    review: number;
+    blocked: number;
+    working: number;
+};
+
+/** The projects, with how much is open and waiting in each; oldest project first. */
+export async function getProjects(): Promise<ProjectSummary[]> {
+    const [projects, tasks] = await Promise.all([
+        db().from('projects').select('id, slug, name, wip_limit').is('archived_at', null).order('created_at'),
+        db().from('tasks').select('project_id, status').not('status', 'in', '(approved,rejected)')
+    ]);
+    if (projects.error) throw new Error(projects.error.message);
+    if (tasks.error) throw new Error(tasks.error.message);
+
+    return projects.data.map((p) => {
+        const mine = tasks.data.filter((t) => t.project_id === p.id);
+
+        return {
+            slug: p.slug as string,
+            name: p.name as string,
+            wipLimit: p.wip_limit as number,
+            open: mine.length,
+            review: mine.filter((t) => t.status === 'review').length,
+            blocked: mine.filter((t) => t.status === 'blocked').length,
+            working: mine.filter((t) => t.status === 'in_progress').length
+        };
+    });
+}
+
+/** Done work stays on the board this long after it was last touched. */
+const DONE_DAYS = 14;
+
+/** One project's tasks, newest change first: everything open, and what was approved (done) lately. */
+export async function getBoard(project: string): Promise<Task[]> {
+    const since = new Date(Date.now() - DONE_DAYS * 86_400_000).toISOString();
+    const { data, error } = await db()
+        .from('tasks')
+        .select(SELECT)
+        .eq('project.slug', project)
+        .neq('status', 'rejected')
+        .or(`status.neq.approved,updated_at.gte.${since}`)
+        .order('updated_at', { ascending: false });
+    if (error) throw new Error(error.message);
+    const rows = data as Row[];
+    const returned = await returnedOf(rows.filter((r) => r.status === 'review').map((r) => r.id));
+
+    return rows.map((r) => toTask(r, returned));
 }
 
 /** Which status a verdict may come from, and where it takes the task. */
@@ -84,7 +143,7 @@ const MOVES: Record<DecisionAction, { from: TaskStatus[]; to: TaskStatus }> = {
     approved: { from: ['review'], to: 'approved' },
     changes_requested: { from: ['review'], to: 'changes_requested' },
     rejected: { from: ['review', 'planned'], to: 'rejected' },
-    started: { from: ['planned'], to: 'in_progress' }
+    started: { from: ['planned', 'new'], to: 'in_progress' }
 };
 
 export type Decision = {

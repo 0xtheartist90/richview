@@ -1,10 +1,9 @@
 // Richie's pages sit behind the admin password (ADMIN_PASSWORD, set in .env.local and in Vercel, never in git). A
 // browser that typed it keeps a key in a cookie; changing the password locks every browser out again. Server only.
-import 'server-only';
-
 import { cookies } from 'next/headers';
 
 import { createHmac, timingSafeEqual } from 'node:crypto';
+import 'server-only';
 
 export const ADMIN_COOKIE = 'richview-admin';
 export const ADMIN_MAX_AGE = 60 * 60 * 24 * 30;

@@ -1,20 +1,17 @@
+import { LoadError } from '@/components/load-error';
 import { ReviewDeck } from '@/components/review/deck';
 import { UnlockForm } from '@/components/unlock-form';
 import { adminKey, adminOpen } from '@/lib/admin';
 import type { Task } from '@/lib/task-types';
 import { getQueue } from '@/lib/tasks';
 
-import { TriangleAlert } from 'lucide-react';
-
 export const dynamic = 'force-dynamic';
 
 /**
- * Richie's review of the agents' finished work (tasks in Review; returned ones first, then by priority, oldest first),
- * as cards to swipe; `?q=planned` is the Planned queue, `?project=<slug>` narrows it to one project.
+ * Richie's review of the agents' finished work across all projects (tasks in Review; returned ones first, then by
+ * priority, oldest first), as cards to swipe.
  */
-export default async function ReviewPage({ searchParams }: { searchParams: Promise<{ q?: string; project?: string }> }) {
-    const { q, project } = await searchParams;
-    const planned = q === 'planned';
+export default async function ReviewPage() {
     if (!adminKey() || !(await adminOpen()))
         return (
             <div className='mx-auto max-w-sm pt-10'>
@@ -24,23 +21,10 @@ export default async function ReviewPage({ searchParams }: { searchParams: Promi
 
     let tasks: Task[];
     try {
-        tasks = await getQueue(planned ? 'planned' : 'review', project);
+        tasks = await getQueue();
     } catch (err) {
-        return (
-            <p className='mx-auto mt-10 flex max-w-md items-start gap-2 rounded-2xl border border-rose-500/30 bg-rose-500/10 p-4 text-sm text-rose-200'>
-                <TriangleAlert className='mt-0.5 size-4 shrink-0' />
-                Couldn&apos;t read the tasks: {(err as Error).message}
-            </p>
-        );
+        return <LoadError message={(err as Error).message} />;
     }
 
-    return (
-        <ReviewDeck
-            key={`${planned ? 'planned' : 'review'}-${project ?? 'all'}`}
-            initial={tasks}
-            renderedAt={Date.now()}
-            mode={planned ? 'planned' : 'review'}
-            project={project}
-        />
-    );
+    return <ReviewDeck initial={tasks} renderedAt={Date.now()} />;
 }

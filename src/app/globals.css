@@ -1,199 +1,261 @@
-@import "tailwindcss";
+@import 'tailwindcss' source(none);
 
-@plugin "tailwindcss-animate";
+/* Only scan the folders that hold the app's code (all of components/, so a new folder can't be missed). */
+@source '../app';
+@source '../components';
+@source '../lib';
+@source '../registry/new-york-v4/ui';
+
+@plugin 'tailwindcss-animate';
 
 @custom-variant dark (&:is(.dark *));
 
-:root {
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --destructive-foreground: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.87 0 0);
-  --chart-1: oklch(0.646 0.222 41.116);
-  --chart-2: oklch(0.6 0.118 184.704);
-  --chart-3: oklch(0.398 0.07 227.392);
-  --chart-4: oklch(0.828 0.189 84.429);
-  --chart-5: oklch(0.769 0.188 70.08);
-  --radius: 0.625rem;
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.87 0 0);
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-}
-
-.dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.145 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.145 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.985 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.396 0.141 25.723);
-  --destructive-foreground: oklch(0.637 0.237 25.331);
-  --border: oklch(0.269 0 0);
-  --input: oklch(0.269 0 0);
-  --ring: oklch(0.439 0 0);
-  --chart-1: oklch(0.488 0.243 264.376);
-  --chart-2: oklch(0.696 0.17 162.48);
-  --chart-3: oklch(0.769 0.188 70.08);
-  --chart-4: oklch(0.627 0.265 303.9);
-  --chart-5: oklch(0.645 0.246 16.439);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(0.269 0 0);
-  --sidebar-ring: oklch(0.439 0 0);
-}
-
-.theme-login-one {
-  --primary: #ce2a2d;
-  --primary-foreground: #fff;
-  --ring: #ce2a2d9c;
-  --radius: 0rem;
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
-  --radius-lg: var(--radius);
-
-  font-family: var(--font-sans);
-
-  a {
-    color: var(--primary);
-  }
-
-  [data-slot="card"] {
-    border-radius: 0rem;
-    box-shadow: none;
-  }
-}
-
-.theme-login-two {
-  --primary: #035fa8;
-  --primary-foreground: #fff;
-  --ring: #035fa89c;
-  font-family: var(--font-serif);
-
-  a {
-    color: var(--primary);
-  }
-}
-
-.theme-login-three {
-  --primary: #22c55e;
-  --primary-foreground: #000;
-  --ring: #22c55e;
-  --radius: 1.5rem;
-
-  font-family: var(--font-manrope);
-
-  a {
-    color: var(--primary);
-  }
-
-  [data-slot="card"] {
-    @apply shadow-xl;
-  }
-
-  [data-slot="input"] {
-    @apply dark:bg-input;
-  }
-}
-
 @theme inline {
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --color-card: var(--card);
-  --color-card-foreground: var(--card-foreground);
-  --color-popover: var(--popover);
-  --color-popover-foreground: var(--popover-foreground);
-  --color-primary: var(--primary);
-  --color-primary-foreground: var(--primary-foreground);
-  --color-secondary: var(--secondary);
-  --color-secondary-foreground: var(--secondary-foreground);
-  --color-muted: var(--muted);
-  --color-muted-foreground: var(--muted-foreground);
-  --color-accent: var(--accent);
-  --color-accent-foreground: var(--accent-foreground);
-  --color-destructive: var(--destructive);
-  --color-destructive-foreground: var(--destructive-foreground);
-  --color-border: var(--border);
-  --color-input: var(--input);
-  --color-ring: var(--ring);
-  --color-chart-1: var(--chart-1);
-  --color-chart-2: var(--chart-2);
-  --color-chart-3: var(--chart-3);
-  --color-chart-4: var(--chart-4);
-  --color-chart-5: var(--chart-5);
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 4px);
-  --color-sidebar: var(--sidebar);
-  --color-sidebar-foreground: var(--sidebar-foreground);
-  --color-sidebar-primary: var(--sidebar-primary);
-  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
-  --color-sidebar-accent: var(--sidebar-accent);
-  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
-  --color-sidebar-border: var(--sidebar-border);
-  --color-sidebar-ring: var(--sidebar-ring);
-  --animate-accordion-down: accordion-down 0.2s ease-out;
-  --animate-accordion-up: accordion-up 0.2s ease-out;
-
-  @keyframes accordion-down {
-    from {
-      height: 0;
-    }
-    to {
-      height: var(--radix-accordion-content-height);
-    }
-  }
-
-  @keyframes accordion-up {
-    from {
-      height: var(--radix-accordion-content-height);
-    }
-    to {
-      height: 0;
-    }
-  }
+    --font-sans: var(--font-montserrat);
+    --font-mono: ui-monospace, SFMono-Regular, monospace;
+    --color-background: var(--background);
+    --color-foreground: var(--foreground);
+    --color-card: var(--card);
+    --color-card-foreground: var(--card-foreground);
+    --color-popover: var(--popover);
+    --color-popover-foreground: var(--popover-foreground);
+    --color-primary: var(--primary);
+    --color-primary-foreground: var(--primary-foreground);
+    --color-secondary: var(--secondary);
+    --color-secondary-foreground: var(--secondary-foreground);
+    --color-muted: var(--muted);
+    --color-muted-foreground: var(--muted-foreground);
+    --color-accent: var(--accent);
+    --color-accent-foreground: var(--accent-foreground);
+    --color-destructive: var(--destructive);
+    --color-destructive-foreground: var(--destructive-foreground);
+    --color-border: var(--border);
+    --color-input: var(--input);
+    --color-ring: var(--ring);
+    --radius-sm: calc(var(--radius) - 4px);
+    --radius-md: calc(var(--radius) - 2px);
+    --radius-lg: var(--radius);
+    --radius-xl: calc(var(--radius) + 4px);
 }
 
 @layer base {
-  * {
-    @apply border-border outline-ring/50;
-  }
-  body {
-    @apply bg-background text-foreground;
-  }
+    * {
+        @apply border-border outline-ring/50;
+    }
+    body {
+        @apply text-foreground;
+        background-color: var(--canvas);
+    }
+    /* Laptop screens: everything a step smaller (about the browser's 85-90% zoom), as rem sizes follow the root. Big
+     desktop monitors keep the full size; breakpoints don't move (media queries read rem as 16px). */
+    @media (min-width: 1024px) and (max-width: 1919px) {
+        html {
+            font-size: 87.5%;
+        }
+    }
+}
+
+/* SRE's theme, dark only (RichView is used at night on a phone): charcoal surfaces, the gold of the logo. */
+:root,
+.dark {
+    --background: #26272c;
+    --canvas: #1b1c20;
+    --foreground: #f4f4f6;
+    --card: #26272c;
+    --card-foreground: #ececee;
+    --popover: #2b2c32;
+    --popover-foreground: #ececee;
+    --primary: #d4b062;
+    --primary-foreground: #1b1c20;
+    --secondary: #2f3036;
+    --secondary-foreground: #ececee;
+    --muted: #2f3036;
+    --muted-foreground: #aeafb7;
+    --accent: #2f3036;
+    --accent-foreground: #ececee;
+    --destructive: oklch(0.396 0.141 25.723);
+    --destructive-foreground: oklch(0.637 0.237 25.331);
+    --border: #3a3b42;
+    --input: #3a3b42;
+    --ring: #d4b062;
+
+    --brand: #d4b062;
+    --brand-2: #f1d98f;
+    --brand-rgb: 212 176 98;
+    --silver: #c8ccd2;
+    --bronze: #c98a5a;
+    --sidebar-bg: #151619;
+    --hero: #26272c;
+    --glow: rgb(212 176 98 / 0.18);
+    --shadow-card: inset 0 1px 0 rgb(255 255 255 / 0.035), 0 12px 32px -18px rgb(0 0 0 / 0.7);
+    --radius: 0.875rem;
+}
+
+body {
+    font-family: var(--font-montserrat), system-ui, sans-serif;
+}
+
+/* Warm ambient glow behind the page, as on the SRE dashboard. */
+body {
+    background-image:
+        radial-gradient(55rem 32rem at 18% -8%, rgb(var(--brand-rgb) / 0.08), transparent 70%),
+        radial-gradient(45rem 30rem at 95% 35%, rgb(var(--brand-rgb) / 0.045), transparent 70%);
+    background-attachment: fixed;
+}
+
+.tabular-nums {
+    font-variant-numeric: tabular-nums;
+}
+
+/* ---- Cockpit kit ---------------------------------------------------------------------------- */
+
+/* Panels: a soft top-lit bezel on cards. */
+.panel {
+    background-image: linear-gradient(180deg, rgb(255 255 255 / 0.03), transparent 38%);
+}
+.dark .panel {
+    box-shadow:
+        inset 0 1px 0 rgb(255 255 255 / 0.05),
+        inset 0 -1px 0 rgb(0 0 0 / 0.35),
+        0 18px 40px -24px rgb(0 0 0 / 0.8);
+}
+
+/* Physical keys: raised, lit from above, pressed on click. */
+.btn-key {
+    color: var(--foreground);
+    background: linear-gradient(180deg, #ffffff, #f1efec);
+    border: 1px solid #dcd9d4;
+    box-shadow:
+        inset 0 1px 0 rgb(255 255 255 / 0.9),
+        0 1px 0 rgb(0 0 0 / 0.05),
+        0 3px 8px -4px rgb(0 0 0 / 0.18);
+    transition:
+        transform 0.08s,
+        box-shadow 0.15s,
+        background 0.15s,
+        filter 0.15s;
+}
+.dark .btn-key,
+.hero .btn-key,
+.dark-panel .btn-key {
+    color: #ececee;
+    background: linear-gradient(180deg, #393a41, #2b2c31);
+    border-color: #45464e;
+    box-shadow:
+        inset 0 1px 0 rgb(255 255 255 / 0.08),
+        0 1px 0 rgb(0 0 0 / 0.5),
+        0 6px 14px -6px rgb(0 0 0 / 0.6);
+}
+.btn-key:hover {
+    filter: brightness(1.08);
+}
+.btn-key:active,
+.btn-primary:active {
+    transform: translateY(1px);
+    box-shadow: inset 0 2px 5px rgb(0 0 0 / 0.35);
+}
+
+.btn-primary {
+    color: #1b1c20;
+    font-weight: 600;
+    background: linear-gradient(180deg, #f6e3a6, #d9b45f 55%, #b48b38);
+    border: 1px solid #e2c47c;
+    box-shadow:
+        inset 0 1px 0 rgb(255 255 255 / 0.5),
+        inset 0 -1px 0 rgb(110 80 20 / 0.35),
+        0 8px 22px -8px rgb(var(--brand-rgb) / 0.6),
+        0 1px 0 rgb(0 0 0 / 0.35);
+    transition:
+        transform 0.08s,
+        box-shadow 0.15s,
+        filter 0.15s;
+}
+.btn-primary:hover {
+    filter: brightness(1.06);
+}
+
+/* Recessed rail for switches, tabs and search. */
+.track {
+    background: rgb(0 0 0 / 0.05);
+    box-shadow:
+        inset 0 1px 3px rgb(0 0 0 / 0.12),
+        0 1px 0 rgb(255 255 255 / 0.7);
+}
+.dark .track,
+.hero .track,
+.dark-panel .track {
+    background: rgb(0 0 0 / 0.32);
+    box-shadow:
+        inset 0 1px 3px rgb(0 0 0 / 0.55),
+        0 1px 0 rgb(255 255 255 / 0.05);
+}
+
+/* Small glowing indicator light. In a layer so utilities can recolour it (the rose alert light on stat cards). */
+@layer components {
+    .led {
+        display: inline-block;
+        width: 6px;
+        height: 6px;
+        border-radius: 9999px;
+        background: var(--brand);
+        box-shadow:
+            0 0 0 2px rgb(var(--brand-rgb) / 0.15),
+            0 0 10px 1px rgb(var(--brand-rgb) / 0.7);
+    }
+}
+
+/* Horizontal rails (tabs) that may scroll on small screens without showing a scrollbar. */
+.no-scrollbar {
+    scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+    display: none;
+}
+
+/* ---- Editorial type ------------------------------------------------------------------------- */
+/* In a layer so utilities (tracking, weight, colour) on the same element can still adjust them. */
+@layer components {
+    /* Numbers that line up: figures of equal width, a touch of air between them. */
+    .readout {
+        font-variant-numeric: tabular-nums lining-nums;
+        letter-spacing: 0.01em;
+    }
+
+    /* Big gold figures, light like the wordmark, with a soft glow. */
+    .text-glow {
+        background: linear-gradient(180deg, var(--brand-2), var(--brand));
+        -webkit-background-clip: text;
+        background-clip: text;
+        color: transparent;
+        font-weight: 300;
+        filter: drop-shadow(0 0 18px var(--glow));
+    }
+
+    /* Section label in the voice of the wordmark: lowercase, widely spaced, with a lit tick. */
+    .label-hud {
+        font-size: 0.75rem;
+        font-weight: 500;
+        letter-spacing: 0.2em;
+        text-transform: lowercase;
+        color: var(--muted-foreground);
+        display: inline-flex;
+        align-items: center;
+        gap: 0.6rem;
+    }
+    .label-hud::before {
+        content: '';
+        width: 10px;
+        height: 2px;
+        border-radius: 2px;
+        background: var(--brand);
+        box-shadow: 0 0 8px rgb(var(--brand-rgb) / 0.7);
+    }
+
+    /* The smallest label that still carries meaning (table heads, captions under numbers): same voice, no tick. */
+    .label-xs {
+        font-size: 0.6875rem;
+        letter-spacing: 0.16em;
+        text-transform: lowercase;
+        font-variant-numeric: tabular-nums lining-nums;
+    }
 }

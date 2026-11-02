@@ -1,5 +1,5 @@
 // The pieces a task is drawn with on /review: its domain colour, the owner badge, the chips and the hero image.
-import type { Task } from '@/lib/task-types';
+import { STATUS_META, type Task } from '@/lib/task-types';
 import { cn } from '@/lib/utils';
 
 import { Sparkles } from 'lucide-react';
@@ -43,10 +43,11 @@ export function Chip({ children, hex, className }: { children: React.ReactNode; 
     );
 }
 
-/** Project, priority (when it stands out), domain, impact and effort as chips. */
-export function TaskChips({ task, className }: { task: Task; className?: string }) {
+/** Project, priority (when it stands out), domain, impact and effort as chips; `status` adds where it stands. */
+export function TaskChips({ task, status, className }: { task: Task; status?: boolean; className?: string }) {
     return (
         <div className={cn('flex flex-wrap gap-1.5', className)}>
+            {status && <Chip hex={STATUS_META[task.status].hex}>{STATUS_META[task.status].label}</Chip>}
             <Chip>{task.project.name}</Chip>
             {PRIORITY_HEX[task.priority] && <Chip hex={PRIORITY_HEX[task.priority]}>{task.priority}</Chip>}
             {task.returned && <Chip hex='#f59e0b'>returned</Chip>}
@@ -99,7 +100,7 @@ export function Hero({ task, className }: { task: Task; className?: string }) {
 
     return img ? (
         // Images from anywhere (Supabase storage, agents' own links): a plain img, no Next image optimisation.
-         
+
         <img
             src={img}
             alt=''
@@ -110,7 +111,7 @@ export function Hero({ task, className }: { task: Task; className?: string }) {
         <div
             className={cn('flex size-full items-center justify-center', className)}
             style={{
-                background: `radial-gradient(120% 80% at 30% 20%, ${hex}55, transparent 60%), radial-gradient(90% 70% at 80% 90%, ${hex}33, transparent 60%), #0b0b0f`
+                background: `radial-gradient(120% 80% at 30% 20%, ${hex}55, transparent 60%), radial-gradient(90% 70% at 80% 90%, ${hex}33, transparent 60%), var(--hero)`
             }}>
             <Sparkles className='size-16 opacity-60' style={{ color: hex }} strokeWidth={1.25} />
         </div>

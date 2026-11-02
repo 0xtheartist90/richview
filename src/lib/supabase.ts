@@ -1,7 +1,7 @@
 // The database, from the server only: the service role key bypasses RLS, so it must never reach the browser.
-import 'server-only';
-
 import { type SupabaseClient, createClient } from '@supabase/supabase-js';
+
+import 'server-only';
 
 let client: SupabaseClient | undefined;
 

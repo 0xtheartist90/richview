@@ -15,15 +15,13 @@ export function PreviewSheet({
     task,
     onClose,
     onApprove,
-    onChanges,
-    labels
+    onChanges
 }: {
     task: Task | null;
     onClose: () => void;
-    onApprove: () => void;
-    onChanges: () => void;
-    /** Other words on the verdict buttons (the Planned queue: Reject / Start). */
-    labels?: { no: string; yes: string };
+    /** Left out (the board, read only): no verdict buttons. */
+    onApprove?: () => void;
+    onChanges?: () => void;
 }) {
     return (
         <AnimatePresence>
@@ -37,8 +35,8 @@ export function PreviewSheet({
                     animate={{ y: 0 }}
                     exit={{ y: '100%' }}
                     transition={{ type: 'spring', damping: 32, stiffness: 320 }}
-                    className='fixed inset-0 z-[60] flex flex-col bg-[#09090b]'>
-                    <Body task={task} onClose={onClose} onApprove={onApprove} onChanges={onChanges} labels={labels} />
+                    className='fixed inset-0 z-[60] flex flex-col bg-[var(--canvas)]'>
+                    <Body task={task} onClose={onClose} onApprove={onApprove} onChanges={onChanges} />
                 </motion.div>
             )}
         </AnimatePresence>
@@ -49,14 +47,12 @@ function Body({
     task,
     onClose,
     onApprove,
-    onChanges,
-    labels
+    onChanges
 }: {
     task: Task;
     onClose: () => void;
-    onApprove: () => void;
-    onChanges: () => void;
-    labels?: { no: string; yes: string };
+    onApprove?: () => void;
+    onChanges?: () => void;
 }) {
     const [slide, setSlide] = useState(0);
     const [framed, setFramed] = useState(false);
@@ -73,14 +69,14 @@ function Body({
                 <button
                     onClick={onClose}
                     aria-label='Close'
-                    className='inline-flex size-9 items-center justify-center rounded-full border border-white/15 bg-white/5'>
+                    className='btn-key inline-flex size-9 items-center justify-center rounded-full'>
                     <X className='size-4' />
                 </button>
                 <p className='min-w-0 flex-1 truncate font-semibold'>{task.title}</p>
                 <OwnerBadge owner={task.owner} />
             </header>
 
-            <div className='flex-1 overflow-y-auto pb-28'>
+            <div className={cn('flex-1 overflow-y-auto', onApprove ? 'pb-28' : 'pb-10')}>
                 {framed && task.previewUrl ? (
                     <div className='flex h-[75dvh] flex-col'>
                         <iframe
@@ -112,7 +108,7 @@ function Body({
                                     target='_blank'
                                     rel='noreferrer'
                                     className='w-full shrink-0 snap-center bg-black'>
-                                    { }
+                                    {}
                                     <img src={img} alt='' className='mx-auto max-h-[60dvh] w-full object-contain' />
                                 </a>
                             ))}
@@ -124,7 +120,7 @@ function Body({
                                         key={img}
                                         className={cn(
                                             'h-1.5 rounded-full transition-all',
-                                            i === slide ? 'w-5 bg-white' : 'w-1.5 bg-white/25'
+                                            i === slide ? 'w-5 bg-[var(--brand)]' : 'w-1.5 bg-white/25'
                                         )}
                                     />
                                 ))}
@@ -136,14 +132,14 @@ function Body({
                 <div className='mx-auto flex max-w-2xl flex-col gap-5 px-4 pt-4'>
                     <div>
                         {task.summary && <p className='text-lg leading-snug font-medium'>{task.summary}</p>}
-                        <TaskChips task={task} className='mt-3' />
+                        <TaskChips task={task} status={!onApprove} className='mt-3' />
                     </div>
 
                     {task.previewUrl && (
                         <div className='flex gap-2'>
                             <button
                                 onClick={() => setFramed((f) => !f)}
-                                className='inline-flex h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-white text-sm font-medium text-black'>
+                                className='btn-primary inline-flex h-11 flex-1 items-center justify-center gap-2 rounded-xl text-sm'>
                                 <MonitorPlay className='size-4' />
                                 {framed ? 'Show images' : 'View preview here'}
                             </button>
@@ -151,7 +147,7 @@ function Body({
                                 href={task.previewUrl}
                                 target='_blank'
                                 rel='noreferrer'
-                                className='inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-white/15 bg-white/5 px-4 text-sm font-medium'>
+                                className='btn-key inline-flex h-11 items-center justify-center gap-2 rounded-xl px-4 text-sm font-medium'>
                                 <ExternalLink className='size-4' /> New tab
                             </a>
                         </div>
@@ -161,17 +157,13 @@ function Body({
                         <div className='grid grid-cols-1 gap-2.5 sm:grid-cols-2'>
                             {task.before && (
                                 <div className='rounded-xl border border-white/10 bg-white/[0.03] p-3.5'>
-                                    <p className='mb-1.5 text-[11px] font-semibold tracking-wide text-white/45 uppercase'>
-                                        Before
-                                    </p>
+                                    <p className='label-hud mb-1.5'>before</p>
                                     <p className='text-sm whitespace-pre-wrap text-white/75'>{task.before}</p>
                                 </div>
                             )}
                             {task.after && (
                                 <div className='rounded-xl border border-emerald-500/30 bg-emerald-500/[0.07] p-3.5'>
-                                    <p className='mb-1.5 text-[11px] font-semibold tracking-wide text-emerald-400 uppercase'>
-                                        After
-                                    </p>
+                                    <p className='label-hud mb-1.5 text-emerald-400'>after</p>
                                     <p className='text-sm whitespace-pre-wrap'>{task.after}</p>
                                 </div>
                             )}
@@ -180,9 +172,7 @@ function Body({
 
                     {task.description && (
                         <div>
-                            <p className='mb-1.5 text-[11px] font-semibold tracking-wide text-white/45 uppercase'>
-                                Description
-                            </p>
+                            <p className='label-hud mb-1.5'>description</p>
                             <p className='text-sm leading-relaxed whitespace-pre-wrap text-white/80'>
                                 {task.description}
                             </p>
@@ -190,9 +180,7 @@ function Body({
                     )}
                     {task.context && (
                         <div className='rounded-xl border border-white/10 bg-white/[0.03] p-3.5'>
-                            <p className='mb-1.5 text-[11px] font-semibold tracking-wide text-white/45 uppercase'>
-                                Context
-                            </p>
+                            <p className='label-hud mb-1.5'>context</p>
                             <p className='text-sm whitespace-pre-wrap text-white/70'>{task.context}</p>
                         </div>
                     )}
@@ -200,18 +188,20 @@ function Body({
             </div>
 
             {/* The verdict, also from here. */}
-            <div className='fixed inset-x-0 bottom-0 flex gap-3 border-t border-white/10 bg-[#09090b]/90 px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] backdrop-blur-xl'>
-                <button
-                    onClick={onChanges}
-                    className='inline-flex h-12 flex-1 items-center justify-center gap-2 rounded-xl border border-rose-500/40 bg-rose-500/10 font-semibold text-rose-400'>
-                    <X className='size-5' /> {labels?.no ?? 'Changes'}
-                </button>
-                <button
-                    onClick={onApprove}
-                    className='inline-flex h-12 flex-1 items-center justify-center gap-2 rounded-xl border border-emerald-500/40 bg-emerald-500/15 font-semibold text-emerald-400'>
-                    <Check className='size-5' /> {labels?.yes ?? 'Approve'}
-                </button>
-            </div>
+            {onApprove && onChanges && (
+                <div className='fixed inset-x-0 bottom-0 flex gap-3 border-t border-white/10 bg-[var(--canvas)]/90 px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] backdrop-blur-xl'>
+                    <button
+                        onClick={onChanges}
+                        className='inline-flex h-12 flex-1 items-center justify-center gap-2 rounded-xl border border-rose-500/40 bg-rose-500/10 font-semibold text-rose-400'>
+                        <X className='size-5' /> Changes
+                    </button>
+                    <button
+                        onClick={onApprove}
+                        className='inline-flex h-12 flex-1 items-center justify-center gap-2 rounded-xl border border-emerald-500/40 bg-emerald-500/15 font-semibold text-emerald-400'>
+                        <Check className='size-5' /> Approve
+                    </button>
+                </div>
+            )}
         </>
     );
 }

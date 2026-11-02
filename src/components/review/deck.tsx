@@ -2,10 +2,9 @@
 
 // /review: the agents' finished work as a stack of cards. Swipe right (or ✓, or →) approves, swipe left (or ✕, or ←)
 // asks for changes with a comment; a tap opens the card full screen. Nothing is saved for 5 seconds, so Undo really
-// takes it back. The Planned queue (mode 'planned'): right starts the card, left rejects it, Skip puts it at the back.
+// takes it back.
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 
 import { Hero, OwnerBadge, TaskChips, domainHex } from '@/components/review/parts';
@@ -13,7 +12,7 @@ import { PreviewSheet } from '@/components/review/preview-sheet';
 import type { DecisionAction, Task } from '@/lib/task-types';
 import { cn } from '@/lib/utils';
 
-import { Check, CheckCheck, Mic, Play, RotateCcw, SkipForward, X } from 'lucide-react';
+import { Check, CheckCheck, Mic, RotateCcw, X } from 'lucide-react';
 import {
     AnimatePresence,
     type MotionValue,
@@ -46,8 +45,6 @@ const buzz = (ms: number | number[]) => {
 
 type Verdict = { action: DecisionAction; comment?: string };
 type Pending = { task: Task; verdict: Verdict; timer: ReturnType<typeof setTimeout> };
-/** Which stack /review shows: work to review, or planned cards to start or reject. */
-export type DeckMode = 'review' | 'planned';
 
 const url = (id: string) => `/api/tasks/${id}/verdict`;
 
@@ -76,19 +73,7 @@ const TOAST_TEXT: Record<DecisionAction, string> = {
     started: 'Started · In progress'
 };
 
-export function ReviewDeck({
-    initial,
-    renderedAt,
-    mode = 'review',
-    project
-}: {
-    initial: Task[];
-    renderedAt: number;
-    mode?: DeckMode;
-    /** The project slug the queue is narrowed to, kept on the tab links. */
-    project?: string;
-}) {
-    const planned = mode === 'planned';
+export function ReviewDeck({ initial, renderedAt }: { initial: Task[]; renderedAt: number }) {
     const router = useRouter();
     const [items, setItems] = useState(() => initial.filter((t) => !isDecided(t.id)));
     const [busy, setBusy] = useState(false);
@@ -240,32 +225,11 @@ export function ReviewDeck({
         setOpen(null);
         buzz(30);
         await fly(1);
-        decide(top, { action: planned ? 'started' : 'approved' });
+        decide(top, { action: 'approved' });
         setBusy(false);
-    };
-
-    /** Planned queue, left: rejected straight away (no comment), with the same 5 seconds to Undo. */
-    const reject = async () => {
-        if (!top || busy) return;
-        setBusy(true);
-        setOpen(null);
-        buzz([15, 40, 15]);
-        await fly(-1);
-        decide(top, { action: 'rejected' });
-        setBusy(false);
-    };
-
-    /** Planned queue: leaves the card on Planned and puts it at the back of the stack. */
-    const skip = () => {
-        if (!top || busy || items.length < 2) return;
-        hintSeen();
-        setOpen(null);
-        x.jump(0);
-        setItems((list) => [...list.filter((t) => t.id !== top.id), top]);
     };
 
     const askChanges = () => {
-        if (planned) return void reject();
         if (!top || busy) return;
         hintSeen();
         setOpen(null);
@@ -304,11 +268,12 @@ export function ReviewDeck({
     });
 
     return (
-        <div className='mx-auto flex h-[calc(100dvh-3.5rem-1rem-env(safe-area-inset-bottom))] min-h-[30rem] w-full max-w-md flex-col'>
+        <div className='mx-auto flex h-[calc(100dvh-3.5rem-1rem-5.5rem-env(safe-area-inset-bottom))] min-h-[28rem] w-full max-w-md flex-col lg:h-[calc(100dvh-4rem-3rem)]'>
             <header className='mb-3 flex items-center gap-3'>
-                <h1 className='sr-only'>{planned ? 'Planned' : 'Review'}</h1>
-                <QueueTabs mode={mode} project={project} />
-                <span className='ml-auto text-sm text-white/45'>{items.length} waiting</span>
+                <h1 className='label-hud text-white/55'>review</h1>
+                <span className='readout ml-auto text-sm text-white/45'>
+                    <span className='text-glow text-base'>{items.length}</span> waiting
+                </span>
             </header>
             <div className='relative flex-1'>
                 {top ? (
@@ -326,7 +291,6 @@ export function ReviewDeck({
                                     onRight={approve}
                                     onLeft={askChanges}
                                     onBack={back}
-                                    planned={planned}
                                 />
                             ) : (
                                 <UnderCard key={task.id} task={task} depth={i} x={x} />
@@ -334,65 +298,45 @@ export function ReviewDeck({
                         )
                         .reverse()
                 ) : (
-                    <AllCaughtUp planned={planned} />
+                    <AllCaughtUp />
                 )}
                 {hint && top && (
                     <span className='pointer-events-none absolute inset-x-0 -bottom-1 z-10 mx-auto flex w-fit items-center gap-3 rounded-full border border-white/15 bg-black/70 px-4 py-2 text-sm font-medium text-white backdrop-blur-md'>
-                        <span className='text-rose-300'>← {planned ? 'Reject' : 'Changes'}</span>
+                        <span className='text-rose-300'>← Changes</span>
                         <span className='text-white/30'>·</span>
-                        <span className='text-emerald-300'>{planned ? 'Start' : 'Approve'} →</span>
+                        <span className='text-emerald-300'>Approve →</span>
                     </span>
                 )}
             </div>
 
             <div className='flex items-start justify-center gap-5 pt-4'>
                 <RoundButton
-                    label={planned ? 'Reject' : 'Ask for changes'}
-                    caption={planned ? 'Reject' : 'Changes'}
+                    label='Ask for changes'
+                    caption='Changes'
                     onClick={askChanges}
                     disabled={!top || busy || !!asking}
                     className='size-16 border-rose-500/40 bg-rose-500/10 text-rose-400'>
                     <X className='size-7' strokeWidth={2.5} />
                 </RoundButton>
-                {planned && (
-                    <RoundButton
-                        label='Skip, stays on Planned'
-                        caption='Skip'
-                        onClick={skip}
-                        disabled={!top || busy || items.length < 2}
-                        className='size-11 border-white/15 bg-white/[0.04] text-white/70'>
-                        <SkipForward className='size-4' />
-                    </RoundButton>
-                )}
                 <RoundButton
                     label='Undo the last one'
                     caption='Undo'
                     onClick={() => last && undo(last)}
                     disabled={!last}
-                    className='size-11 border-white/15 bg-white/[0.04] text-white/70'>
+                    className='btn-key size-11'>
                     <RotateCcw className='size-4' />
                 </RoundButton>
                 <RoundButton
-                    label={planned ? 'Start: In progress' : 'Approve'}
-                    caption={planned ? 'Start' : 'Approve'}
+                    label='Approve'
+                    caption='Approve'
                     onClick={() => void approve()}
                     disabled={!top || busy || !!asking}
                     className='size-16 border-emerald-500/40 bg-emerald-500/10 text-emerald-400'>
-                    {planned ? (
-                        <Play className='size-6' strokeWidth={2.25} />
-                    ) : (
-                        <Check className='size-7' strokeWidth={2.5} />
-                    )}
+                    <Check className='size-7' strokeWidth={2.5} />
                 </RoundButton>
             </div>
 
-            <PreviewSheet
-                task={open}
-                onClose={() => setOpen(null)}
-                onApprove={approve}
-                onChanges={askChanges}
-                labels={planned ? { no: 'Reject', yes: 'Start' } : undefined}
-            />
+            <PreviewSheet task={open} onClose={() => setOpen(null)} onApprove={approve} onChanges={askChanges} />
             <ChangesSheet task={asking} onCancel={cancelAsk} onSave={(c) => void sendBack(c)} />
         </div>
     );
@@ -405,8 +349,7 @@ function TopCard({
     onTap,
     onRight,
     onLeft,
-    onBack,
-    planned
+    onBack
 }: {
     task: Task;
     x: MotionValue<number>;
@@ -415,7 +358,6 @@ function TopCard({
     onRight: () => void;
     onLeft: () => void;
     onBack: () => void;
-    planned: boolean;
 }) {
     const rotate = useTransform(x, [-320, 0, 320], [-14, 0, 14]);
     const approveIn = useTransform(x, [25, SWIPE], [0, 1]);
@@ -446,10 +388,10 @@ function TopCard({
             className='absolute inset-0 cursor-grab'>
             <Card task={task}>
                 <Stamp opacity={approveIn} className='top-8 left-6 -rotate-12 border-emerald-400 text-emerald-400'>
-                    {planned ? 'Start' : 'Approved'}
+                    Approved
                 </Stamp>
                 <Stamp opacity={changesIn} className='top-8 right-6 rotate-12 border-rose-400 text-rose-400'>
-                    {planned ? 'Reject' : 'Changes'}
+                    Changes
                 </Stamp>
             </Card>
         </motion.div>
@@ -474,7 +416,7 @@ function Card({ task, dim = 0, children }: { task: Task; dim?: number; children?
     return (
         <article
             className={cn(
-                'relative size-full overflow-hidden rounded-[1.75rem] border border-white/10 bg-[#0b0b0f] select-none',
+                'relative size-full overflow-hidden rounded-[1.75rem] border border-white/10 bg-[var(--hero)] select-none',
                 // A card waiting underneath shows only its edges, none of its content.
                 dim > 0 && '*:invisible'
             )}
@@ -558,54 +500,26 @@ function RoundButton({
     );
 }
 
-/** Review (work to approve) or Planned (cards to start): two queues on /review. */
-function QueueTabs({ mode, project }: { mode: DeckMode; project?: string }) {
-    const tab = (m: DeckMode, label: string) => {
-        const q = new URLSearchParams({ ...(m === 'planned' ? { q: 'planned' } : {}), ...(project ? { project } : {}) });
-
-        return (
-            <Link
-                href={`/review${q.size ? `?${q}` : ''}`}
-                aria-current={mode === m ? 'page' : undefined}
-                className={cn(
-                    'inline-flex h-8 items-center rounded-md px-3 text-sm font-semibold transition-colors',
-                    mode === m ? 'bg-white/10 text-white' : 'text-white/50 hover:text-white/80'
-                )}>
-                {label}
-            </Link>
-        );
-    };
-
-    return (
-        <nav aria-label='Queues' className='inline-flex rounded-lg border border-white/10 bg-white/[0.03] p-0.5'>
-            {tab('review', 'Review')}
-            {tab('planned', 'Planned')}
-        </nav>
-    );
-}
-
-function AllCaughtUp({ planned }: { planned: boolean }) {
+function AllCaughtUp() {
     return (
         <motion.div
             initial={{ opacity: 0, scale: 0.9 }}
             animate={{ opacity: 1, scale: 1 }}
             transition={{ type: 'spring', damping: 18 }}
-            className='flex size-full flex-col items-center justify-center gap-5 rounded-[1.75rem] border border-white/[0.07] bg-[radial-gradient(80%_60%_at_50%_35%,rgb(52_211_153/0.12),transparent_70%)] p-8 text-center'>
+            className='flex size-full flex-col items-center justify-center gap-5 rounded-[1.75rem] border border-white/[0.07] bg-[radial-gradient(80%_60%_at_50%_35%,rgb(var(--brand-rgb)/0.16),transparent_70%)] p-8 text-center'>
             <div className='relative'>
                 <motion.span
-                    className='absolute inset-0 rounded-full bg-emerald-500/30'
+                    className='absolute inset-0 rounded-full bg-[var(--brand)]/30'
                     animate={{ scale: [1, 1.6], opacity: [0.6, 0] }}
                     transition={{ duration: 2.2, repeat: Infinity, ease: 'easeOut' }}
                 />
-                <span className='relative flex size-24 items-center justify-center rounded-full border border-emerald-400/40 bg-emerald-500/15'>
-                    <CheckCheck className='size-11 text-emerald-400' strokeWidth={2} />
+                <span className='relative flex size-24 items-center justify-center rounded-full border border-[var(--brand)]/40 bg-[var(--brand)]/15'>
+                    <CheckCheck className='size-11 text-[var(--brand)]' strokeWidth={2} />
                 </span>
             </div>
             <div>
-                <p className='text-2xl font-semibold'>All caught up</p>
-                <p className='mt-1.5 text-sm text-white/50'>
-                    {planned ? 'No planned cards waiting to start.' : 'No work waiting for your review.'}
-                </p>
+                <p className='text-2xl font-light tracking-wide'>All caught up</p>
+                <p className='mt-1.5 text-sm text-white/50'>No work waiting for your review.</p>
             </div>
         </motion.div>
     );
@@ -659,7 +573,7 @@ function ChangesSheet({
                         animate={{ y: 0 }}
                         exit={{ y: '100%' }}
                         transition={{ type: 'spring', damping: 30, stiffness: 340 }}
-                        className='fixed inset-x-0 bottom-0 z-[80] mx-auto max-w-lg rounded-t-3xl border border-white/10 bg-[#141418] px-4 pt-3 pb-[max(1rem,env(safe-area-inset-bottom))] shadow-2xl'>
+                        className='dark-panel fixed inset-x-0 bottom-0 z-[80] mx-auto max-w-lg rounded-t-3xl border border-white/10 bg-[var(--sidebar-bg)] px-4 pt-3 pb-[max(1rem,env(safe-area-inset-bottom))] shadow-2xl'>
                         <ChangesForm task={task} onCancel={onCancel} onSave={onSave} />
                     </motion.div>
                 </>
@@ -724,7 +638,7 @@ function ChangesForm({
                     rows={4}
                     maxLength={5000}
                     placeholder='Tell them what to fix…'
-                    className='w-full resize-none rounded-xl border border-white/10 bg-black/30 p-3 pr-12 text-[16px] text-white outline-none placeholder:text-white/35 focus:ring-2 focus:ring-white/30'
+                    className='track w-full resize-none rounded-xl p-3 pr-12 text-[16px] text-white outline-none placeholder:text-white/35 focus:ring-2 focus:ring-[var(--ring)]'
                 />
                 {Speech && (
                     <button
@@ -760,7 +674,7 @@ function ChangesForm({
                 <button
                     type='button'
                     onClick={onCancel}
-                    className='inline-flex h-12 flex-1 items-center justify-center rounded-xl border border-white/15 bg-white/5 font-medium'>
+                    className='btn-key inline-flex h-12 flex-1 items-center justify-center rounded-xl font-medium'>
                     Cancel
                 </button>
                 <button

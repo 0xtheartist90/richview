@@ -1,12 +1,11 @@
 // Tells a task's owner what Richie decided, at the webhook URL the agent registered. The body is signed with the
 // agent's webhook secret (X-RichView-Signature: sha256=<hex HMAC of the raw body>). Agents without a webhook read the
 // same decisions from the API instead. Server only.
-import 'server-only';
-
 import { db } from '@/lib/supabase';
 import type { Decision } from '@/lib/tasks';
 
 import { createHmac } from 'node:crypto';
+import 'server-only';
 
 /** POSTs the decision; gives up after 5 seconds and only logs a failure (the swipe is already saved). */
 export async function notifyOwner(d: Decision): Promise<void> {
@@ -33,7 +32,10 @@ export async function notifyOwner(d: Decision): Promise<void> {
     try {
         const res = await fetch(agent.webhook_url, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', ...(signature ? { 'X-RichView-Signature': signature } : {}) },
+            headers: {
+                'Content-Type': 'application/json',
+                ...(signature ? { 'X-RichView-Signature': signature } : {})
+            },
             body,
             signal: AbortSignal.timeout(5000)
         });
