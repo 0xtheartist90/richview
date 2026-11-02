@@ -3,11 +3,13 @@
 // /board: one project at a time, in SRE's look. On a phone the statuses are folding panels one under the other, what
 // needs Richie on top; on a desktop they're columns side by side in a task's lifecycle order. The projects sit in a
 // rail on top (and in the sidebar on a desktop), each in its own colour, so it's always clear which one you're in.
+// Richie manages a card from its sheet, or on a desktop drags it to another column.
 import { useEffect, useMemo, useState } from 'react';
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 
+import { type Member, TaskEditor, saveTask } from '@/components/board/task-editor';
 import { Avatar, domainHex } from '@/components/review/parts';
 import { PreviewSheet } from '@/components/review/preview-sheet';
 import { DESK_ORDER, PHONE_ORDER, STATUS_META, type Task, type TaskStatus } from '@/lib/task-types';
@@ -15,6 +17,7 @@ import type { ProjectSummary } from '@/lib/tasks';
 import { cn } from '@/lib/utils';
 
 import { ArrowRight, ChevronDown, Flag, Repeat, RotateCcw, ShieldCheck, UserCheck } from 'lucide-react';
+import { toast } from 'sonner';
 
 /** Done work starts folded away on a phone. */
 const FOLDED: TaskStatus[] = ['approved'];
@@ -33,7 +36,7 @@ function ago(iso: string) {
 }
 
 /** A status's coloured light, as SRE's led. */
-function Led({ hex }: { hex: string }) {
+export function Led({ hex }: { hex: string }) {
     return (
         <span
             aria-hidden
@@ -46,11 +49,14 @@ function Led({ hex }: { hex: string }) {
 export function Board({
     projects,
     project,
-    tasks
+    tasks,
+    team
 }: {
     projects: ProjectSummary[];
     project: ProjectSummary;
     tasks: Task[];
+    /** Who a card can be given to: the agents of this project. */
+    team: Member[];
 }) {
     const router = useRouter();
     const [owner, setOwner] = useState<string | null>(null);
@@ -70,8 +76,28 @@ export function Board({
         };
     }, [router]);
 
+    // Cards dragged to another column show there right away, until the next read has them.
+    const [moved, setMoved] = useState<Record<string, TaskStatus>>({});
+    useEffect(() => setMoved({}), [tasks]);
+    const all = tasks.map((t) => (moved[t.id] ? { ...t, status: moved[t.id] } : t));
+
     const owners = useMemo(() => [...new Set(tasks.map((t) => t.owner).filter(Boolean))].sort(), [tasks]);
-    const shown = owner ? tasks.filter((t) => t.owner === owner) : tasks;
+    const shown = owner ? all.filter((t) => t.owner === owner) : all;
+
+    /** A card dropped on another column. Changes requested needs a why, so that one opens the card instead. */
+    const move = async (id: string, to: TaskStatus) => {
+        const task = all.find((t) => t.id === id);
+        if (!task || task.status === to) return;
+        if (to === 'changes_requested') {
+            toast('Say what should change', { description: 'Pick Changes requested here and add a comment.' });
+
+            return setOpen(task);
+        }
+        if (to === 'peer_review' && !task.reviewer) return void toast.error('This card has no reviewer');
+        setMoved((m) => ({ ...m, [id]: to }));
+        if (await saveTask(id, { status: to })) router.refresh();
+        else setMoved(({ [id]: _, ...rest }) => rest);
+    };
     const of = (s: TaskStatus) => shown.filter((t) => t.status === s);
 
     const toggle = (s: TaskStatus) =>
@@ -151,11 +177,13 @@ export function Board({
             {/* Desktop: every status a column, left to right as a task goes. */}
             <div className='mt-5 hidden auto-cols-[minmax(10.5rem,1fr)] grid-flow-col items-start gap-3 overflow-x-auto pb-2 lg:grid'>
                 {DESK_ORDER.map((s) => (
-                    <StatusPanel key={s} status={s} tasks={of(s)} column onOpen={setOpen} />
+                    <StatusPanel key={s} status={s} tasks={of(s)} column onOpen={setOpen} onDrop={move} />
                 ))}
             </div>
 
-            <PreviewSheet task={open} onClose={() => setOpen(null)} />
+            <PreviewSheet task={open} onClose={() => setOpen(null)}>
+                {open && <TaskEditor key={open.id} task={open} team={team} onDone={() => setOpen(null)} />}
+            </PreviewSheet>
         </div>
     );
 }
@@ -167,7 +195,8 @@ function StatusPanel({
     folded = false,
     column = false,
     onToggle,
-    onOpen
+    onOpen,
+    onDrop
 }: {
     status: TaskStatus;
     tasks: Task[];
@@ -175,14 +204,37 @@ function StatusPanel({
     column?: boolean;
     onToggle?: () => void;
     onOpen: (t: Task) => void;
+    /** A desktop column: a card dragged onto it moves here. */
+    onDrop?: (id: string, to: TaskStatus) => void;
 }) {
     const meta = STATUS_META[status];
+    const [over, setOver] = useState(false);
 
     return (
         <section
+            onDragOver={
+                onDrop
+                    ? (e) => {
+                          e.preventDefault();
+                          setOver(true);
+                      }
+                    : undefined
+            }
+            onDragLeave={onDrop ? () => setOver(false) : undefined}
+            onDrop={
+                onDrop
+                    ? (e) => {
+                          e.preventDefault();
+                          setOver(false);
+                          const id = e.dataTransfer.getData('text/plain');
+                          if (id) onDrop(id, status);
+                      }
+                    : undefined
+            }
             className={cn(
-                'bg-card panel overflow-hidden rounded-2xl border shadow-[var(--shadow-card)]',
-                column && 'flex max-h-[calc(100dvh-17rem)] flex-col'
+                'bg-card panel overflow-hidden rounded-2xl border shadow-[var(--shadow-card)] transition-colors',
+                column && 'flex max-h-[calc(100dvh-17rem)] flex-col',
+                over && 'border-[var(--brand)]/60 bg-[var(--brand)]/[0.06]'
             )}>
             <div className='h-0.5' style={{ background: `linear-gradient(90deg, ${meta.hex}, transparent)` }} />
             <div className='flex items-center'>
@@ -220,7 +272,7 @@ function StatusPanel({
                 <ul className={cn('flex flex-col gap-1.5 px-2 pb-2', column && 'min-h-0 overflow-y-auto')}>
                     {tasks.map((t) => (
                         <li key={t.id}>
-                            <Row task={t} onOpen={() => onOpen(t)} />
+                            <Row task={t} onOpen={() => onOpen(t)} draggable={!!onDrop} />
                         </li>
                     ))}
                     {!tasks.length && <li className='label-xs px-2.5 pt-1 pb-3 text-white/30'>nothing here</li>}
@@ -231,14 +283,17 @@ function StatusPanel({
 }
 
 /** The projects in a recessed rail, as SRE's tabs; it scrolls sideways once there are more than fit. */
-function ProjectRail({
+export function ProjectRail({
     projects,
     current,
-    className
+    className,
+    page = '/board'
 }: {
     projects: ProjectSummary[];
     current: string;
     className?: string;
+    /** The page each tab opens, for that project. */
+    page?: string;
 }) {
     return (
         <nav
@@ -250,7 +305,7 @@ function ProjectRail({
                 return (
                     <Link
                         key={p.slug}
-                        href={`/board?project=${p.slug}`}
+                        href={`${page}?project=${p.slug}`}
                         aria-current={active ? 'page' : undefined}
                         className={cn(
                             'inline-flex h-9 shrink-0 items-center gap-2 rounded-lg px-3.5 text-sm font-medium',
@@ -271,7 +326,7 @@ function ProjectRail({
 }
 
 /** One number in the header card, as SRE's small stat tile. */
-function Stat({ label, value, alert }: { label: string; value: number | string; alert?: boolean }) {
+export function Stat({ label, value, alert }: { label: string; value: number | string; alert?: boolean }) {
     return (
         <div
             className={cn(
@@ -322,12 +377,17 @@ function Empty({ owner, project }: { owner: string | null; project: string }) {
     );
 }
 
-/** One task: title, then owner, domain, priority and how long ago it changed. A tap opens it. */
-function Row({ task, onOpen }: { task: Task; onOpen: () => void }) {
+/** One task: title, then owner, domain, priority and how long ago it changed. A tap opens it; on a desktop it drags. */
+function Row({ task, onOpen, draggable }: { task: Task; onOpen: () => void; draggable?: boolean }) {
     return (
         <button
             onClick={onOpen}
-            className='flex w-full items-start gap-3 rounded-xl border border-white/[0.05] bg-white/[0.025] p-3 text-left transition-colors hover:bg-white/[0.05] active:bg-white/[0.07]'>
+            draggable={draggable}
+            onDragStart={draggable ? (e) => e.dataTransfer.setData('text/plain', task.id) : undefined}
+            className={cn(
+                'flex w-full items-start gap-3 rounded-xl border border-white/[0.05] bg-white/[0.025] p-3 text-left transition-colors hover:bg-white/[0.05] active:bg-white/[0.07]',
+                draggable && 'cursor-grab active:cursor-grabbing'
+            )}>
             <span
                 className='mt-1 h-8 w-[3px] shrink-0 rounded-full'
                 style={{ background: domainHex(task.domain) }}

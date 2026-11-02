@@ -15,13 +15,16 @@ export function PreviewSheet({
     task,
     onClose,
     onApprove,
-    onChanges
+    onChanges,
+    children
 }: {
     task: Task | null;
     onClose: () => void;
-    /** Left out (the board, read only): no verdict buttons. */
+    /** Left out (the board): no verdict buttons. */
     onApprove?: () => void;
     onChanges?: () => void;
+    /** Under the card's details (the board's Manage panel). */
+    children?: React.ReactNode;
 }) {
     return (
         <AnimatePresence>
@@ -36,7 +39,9 @@ export function PreviewSheet({
                     exit={{ y: '100%' }}
                     transition={{ type: 'spring', damping: 32, stiffness: 320 }}
                     className='fixed inset-0 z-[60] flex flex-col bg-[var(--canvas)]'>
-                    <Body task={task} onClose={onClose} onApprove={onApprove} onChanges={onChanges} />
+                    <Body task={task} onClose={onClose} onApprove={onApprove} onChanges={onChanges}>
+                        {children}
+                    </Body>
                 </motion.div>
             )}
         </AnimatePresence>
@@ -47,12 +52,14 @@ function Body({
     task,
     onClose,
     onApprove,
-    onChanges
+    onChanges,
+    children
 }: {
     task: Task;
     onClose: () => void;
     onApprove?: () => void;
     onChanges?: () => void;
+    children?: React.ReactNode;
 }) {
     const [slide, setSlide] = useState(0);
     const [framed, setFramed] = useState(false);
@@ -184,6 +191,7 @@ function Body({
                             <p className='text-sm whitespace-pre-wrap text-white/70'>{task.context}</p>
                         </div>
                     )}
+                    {children}
                 </div>
             </div>
 
