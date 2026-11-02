@@ -1,7 +1,7 @@
-// What the agent API (/api/agent/*) shares: who's calling (a lead, by its key), what a task looks like on the wire,
-// what a request may hold, and the answers it gets. Only lead agents have a key; every other agent is a name that
-// owns, reviews or comments on a card. Leads read every project and write only in their own (peer checks aside).
-// Server only.
+// What the agent API (/api/agent/*) shares: who's calling (an agent, by its own key), what a task looks like on the
+// wire, what a request may hold, and the answers it gets. Every agent reads every project. A lead writes in its own
+// projects (lead_projects); any other agent in those of the lead of its project (agents.project_id). Peer checks
+// are the exception: the reviewer may sit in another team. Server only.
 import { NextResponse } from 'next/server';
 
 import { db } from '@/lib/supabase';
@@ -12,52 +12,93 @@ import 'server-only';
 import { z } from 'zod';
 
 export type Project = { id: string; slug: string; name: string };
-export type Lead = { id: string; name: string; projects: Project[] };
+/** The agent behind the key: the projects it may write in, and whether it leads them. */
+export type Caller = { id: string; name: string; lead: boolean; projectId: string | null; projects: Project[] };
 
 export const hashKey = (key: string) => createHash('sha256').update(key).digest('hex');
 
 /** A JSON error the agent can read: `{ "error": "..." }`. */
 export const fail = (status: number, error: string) => NextResponse.json({ error }, { status });
 
+/** The projects each lead leads, by lead id (active leads only). */
+async function leadProjects(): Promise<{ agent_id: string; project_id: string }[]> {
+    const { data, error } = await db()
+        .from('lead_projects')
+        .select('agent_id, project_id, agent:agents!inner(active, is_lead)')
+        .eq('agent.active', true)
+        .eq('agent.is_lead', true);
+    if (error) throw new Error(error.message);
+
+    return data.map((r) => ({ agent_id: r.agent_id as string, project_id: r.project_id as string }));
+}
+
 /**
- * The lead behind `Authorization: Bearer <key>`, with the projects it writes in; a 401 answer when the key is
- * missing, unknown, or not an active lead's.
+ * The agent behind `Authorization: Bearer <key>`, with the projects it may write in; a 401 answer when the key is
+ * missing, unknown, or the agent isn't active.
  */
-export async function authLead(req: Request): Promise<Lead | NextResponse> {
+export async function authAgent(req: Request): Promise<Caller | NextResponse> {
     const key = /^Bearer\s+(\S+)$/i.exec(req.headers.get('authorization') ?? '')?.[1];
     if (!key) return fail(401, 'Send Authorization: Bearer <your API key>');
     const { data, error } = await db()
         .from('agents')
-        .select('id, name, lead_projects(project:projects(id, slug, name, archived_at))')
+        .select('id, name, is_lead, project_id')
         .eq('api_key_hash', hashKey(key))
-        .eq('is_lead', true)
         .eq('active', true)
         .maybeSingle();
     if (error) return fail(502, error.message);
     if (!data) return fail(401, 'Unknown or revoked API key');
-    const rows = (data.lead_projects ?? []) as unknown as {
-        project: (Project & { archived_at: string | null }) | null;
-    }[];
 
-    return {
-        id: data.id as string,
-        name: data.name as string,
-        projects: rows
-            .map((r) => r.project)
-            .filter((p): p is Project & { archived_at: string | null } => !!p && !p.archived_at)
-            .map(({ id, slug, name }) => ({ id, slug, name }))
-    };
+    const links = await leadProjects();
+    const lead = data.is_lead as boolean;
+    const projectId = (data.project_id as string | null) ?? null;
+    // A lead: its own projects. Anyone else: every project of its project's lead(s), and its own project.
+    const leads = lead ? [data.id as string] : links.filter((l) => l.project_id === projectId).map((l) => l.agent_id);
+    const ids = new Set(links.filter((l) => leads.includes(l.agent_id)).map((l) => l.project_id));
+    if (!lead && projectId) ids.add(projectId);
+
+    let projects: Project[] = [];
+    if (ids.size) {
+        const p = await db()
+            .from('projects')
+            .select('id, slug, name')
+            .in('id', [...ids])
+            .is('archived_at', null);
+        if (p.error) return fail(502, p.error.message);
+        projects = p.data as Project[];
+    }
+
+    return { id: data.id as string, name: data.name as string, lead, projectId, projects };
 }
 
-export const writes = (lead: Lead, projectId: string) => lead.projects.some((p) => p.id === projectId);
+export const writes = (caller: Caller, projectId: string) => caller.projects.some((p) => p.id === projectId);
 
-/** Every agent by name (case-insensitive), so a request can name an owner, reviewer or commenter. */
-export async function agentsByName(): Promise<Map<string, { id: string; name: string }>> {
-    const { data, error } = await db().from('agents').select('id, name').eq('active', true);
+/** An agent as other agents name it: which project it's in, and which it leads. */
+export type Member = { id: string; name: string; lead: boolean; projectId: string | null; leads: string[] };
+
+/** Every active agent by name (case-insensitive), so a request can name an owner or a reviewer. */
+export async function agentsByName(): Promise<Map<string, Member>> {
+    const [{ data, error }, links] = await Promise.all([
+        db().from('agents').select('id, name, is_lead, project_id').eq('active', true),
+        leadProjects()
+    ]);
     if (error) throw new Error(error.message);
 
-    return new Map(data.map((a) => [(a.name as string).toLowerCase(), { id: a.id as string, name: a.name as string }]));
+    return new Map(
+        data.map((a) => [
+            (a.name as string).toLowerCase(),
+            {
+                id: a.id as string,
+                name: a.name as string,
+                lead: a.is_lead as boolean,
+                projectId: (a.project_id as string | null) ?? null,
+                leads: links.filter((l) => l.agent_id === a.id).map((l) => l.project_id)
+            }
+        ])
+    );
 }
+
+/** Whether an agent belongs to a project: it's in it, or leads it. */
+export const belongs = (m: Member, projectId: string) => m.projectId === projectId || m.leads.includes(projectId);
 
 /** The request's JSON body, or a 400 that says what's wrong with it (the first problem, with its field). */
 export async function parseBody<T extends z.ZodType>(req: Request, schema: T): Promise<z.infer<T> | NextResponse> {
@@ -125,7 +166,8 @@ export const TaskCreate = z.strictObject({
     after: fields.after.optional(),
     context: fields.context.optional(),
     options: fields.options.optional(),
-    owner: fields.owner,
+    /** Whose work it is: the caller when left out; only a lead may name another agent of the project. */
+    owner: fields.owner.optional(),
     reviewer: fields.reviewer.optional()
 });
 export type TaskCreate = z.infer<typeof TaskCreate>;
@@ -162,6 +204,7 @@ export type TaskRow = Record<string, unknown> & {
     project_id: string;
     owner_id: string | null;
     reviewer_id: string | null;
+    created_by: string | null;
     peer_checked_at: string | null;
     status: string;
     project: { slug: string; name: string };

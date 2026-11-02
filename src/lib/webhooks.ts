@@ -1,6 +1,6 @@
-// Tells a project's lead agent what Richie decided, at the webhook URL the lead registered (PUT /api/agent/webhook).
-// The lead passes it on to the task's owner. The body is signed with the lead's webhook secret
-// (X-RichView-Signature: sha256=<hex HMAC of the raw body>). Leads without a webhook read the same decisions from
+// Tells the task's owner what Richie decided, with a copy to the project's lead, each at the webhook URL it set
+// (PUT /api/agent/webhook). Each body is signed with that agent's webhook secret
+// (X-RichView-Signature: sha256=<hex HMAC of the raw body>). Agents without a webhook read the same decisions from
 // GET /api/agent/decisions instead. Server only.
 import { db } from '@/lib/supabase';
 import type { Decision } from '@/lib/tasks';
@@ -8,48 +8,62 @@ import type { Decision } from '@/lib/tasks';
 import { createHmac } from 'node:crypto';
 import 'server-only';
 
-type Lead = { name: string; webhook_url: string; webhook_secret: string | null };
+type Hook = { id: string; name: string; webhook_url: string | null; webhook_secret: string | null; active: boolean };
 
-/** POSTs the decision to every active lead of the task's project; gives up after 5 seconds each and only logs. */
-export async function notifyLead(d: Decision): Promise<void> {
-    const { data, error } = await db()
+/** POSTs the decision to the owner and the project's lead(s), once each; 5 seconds each, failures only logged. */
+export async function notifyDecision(d: Decision): Promise<void> {
+    const leads = await db()
         .from('lead_projects')
-        .select('agent:agents!inner(name, webhook_url, webhook_secret, active, is_lead)')
+        .select('agent:agents!inner(id, name, webhook_url, webhook_secret, active, is_lead)')
         .eq('project_id', d.projectId)
-        .eq('agent.active', true)
-        .eq('agent.is_lead', true)
-        .not('agent.webhook_url', 'is', null);
-    if (error) return console.error(`Webhook leads for decision ${d.seq}:`, error.message);
-    const leads = (data as unknown as { agent: Lead }[]).map((r) => r.agent);
-    if (!leads.length) return;
-
-    let owner: string | null = null;
+        .eq('agent.is_lead', true);
+    if (leads.error) return console.error(`Webhook leads for decision ${d.seq}:`, leads.error.message);
+    let owner: Hook | null = null;
     if (d.agentId) {
-        const o = await db().from('agents').select('name').eq('id', d.agentId).maybeSingle();
-        owner = (o.data?.name as string | undefined) ?? null;
+        const o = await db()
+            .from('agents')
+            .select('id, name, webhook_url, webhook_secret, active')
+            .eq('id', d.agentId)
+            .maybeSingle();
+        owner = (o.data as Hook | null) ?? null;
     }
-    const body = JSON.stringify({
-        event: 'decision',
-        seq: d.seq,
-        taskId: d.taskId,
-        project: d.project,
-        title: d.title,
-        owner,
-        action: d.action,
-        comment: d.comment
-    });
 
-    const sent = await Promise.all(leads.map((lead) => post(lead, body, d.seq)));
+    const to = new Map<string, { hook: Hook; role: 'owner' | 'lead' }>();
+    if (owner) to.set(owner.id, { hook: owner, role: 'owner' });
+    for (const { agent } of leads.data as unknown as { agent: Hook }[])
+        if (!to.has(agent.id)) to.set(agent.id, { hook: agent, role: 'lead' });
+
+    const targets = [...to.values()].filter(({ hook }) => hook.active && hook.webhook_url);
+    if (!targets.length) return;
+    const sent = await Promise.all(
+        targets.map(({ hook, role }) =>
+            post(
+                hook,
+                JSON.stringify({
+                    event: 'decision',
+                    role,
+                    seq: d.seq,
+                    taskId: d.taskId,
+                    project: d.project,
+                    title: d.title,
+                    owner: owner?.name ?? null,
+                    action: d.action,
+                    comment: d.comment
+                }),
+                d.seq
+            )
+        )
+    );
     if (sent.some(Boolean))
         await db().from('decisions').update({ delivered_at: new Date().toISOString() }).eq('seq', d.seq);
 }
 
-async function post(lead: Lead, body: string, seq: number): Promise<boolean> {
-    const signature = lead.webhook_secret
-        ? `sha256=${createHmac('sha256', lead.webhook_secret).update(body).digest('hex')}`
+async function post(hook: Hook, body: string, seq: number): Promise<boolean> {
+    const signature = hook.webhook_secret
+        ? `sha256=${createHmac('sha256', hook.webhook_secret).update(body).digest('hex')}`
         : null;
     try {
-        const res = await fetch(lead.webhook_url, {
+        const res = await fetch(hook.webhook_url!, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -58,11 +72,11 @@ async function post(lead: Lead, body: string, seq: number): Promise<boolean> {
             body,
             signal: AbortSignal.timeout(5000)
         });
-        if (!res.ok) console.error(`Webhook ${lead.name}: ${res.status} for decision ${seq}`);
+        if (!res.ok) console.error(`Webhook ${hook.name}: ${res.status} for decision ${seq}`);
 
         return res.ok;
     } catch (err) {
-        console.error(`Webhook ${lead.name} failed for decision ${seq}:`, (err as Error).message);
+        console.error(`Webhook ${hook.name} failed for decision ${seq}:`, (err as Error).message);
 
         return false;
     }

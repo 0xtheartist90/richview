@@ -164,7 +164,7 @@ export type Decision = {
 
 /**
  * Richie's verdict: moves the task (only from a status it may come from, so a double swipe does nothing twice), keeps
- * his comment, and adds it to the decision feed the project's lead reads. Null when the task isn't where the verdict expects.
+ * his comment, and adds it to the decision feed the owner and the project's lead read. Null when the task isn't where the verdict expects.
  */
 export async function decide(id: string, action: DecisionAction, comment?: string): Promise<Decision | null> {
     const move = MOVES[action];

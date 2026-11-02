@@ -3,7 +3,7 @@ import { NextResponse, after } from 'next/server';
 import { adminOpen } from '@/lib/admin';
 import { DECISION_ACTIONS } from '@/lib/task-types';
 import { decide } from '@/lib/tasks';
-import { notifyLead } from '@/lib/webhooks';
+import { notifyDecision } from '@/lib/webhooks';
 
 import { z } from 'zod';
 
@@ -12,7 +12,7 @@ const Verdict = z.object({
     comment: z.string().trim().max(5000).optional()
 });
 
-/** Richie's verdict on a card (a swipe); the project's lead hears it by webhook once the answer is out. */
+/** Richie's verdict on a card (a swipe); the owner (and the project's lead) hear it by webhook once the answer is out. */
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
     if (!(await adminOpen())) return NextResponse.json({ error: 'RichView is locked' }, { status: 403 });
     const { id } = await params;
@@ -25,7 +25,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     try {
         const decision = await decide(id, action, comment || undefined);
         if (!decision) return NextResponse.json({ error: 'Already decided' }, { status: 409 });
-        after(() => notifyLead(decision));
+        after(() => notifyDecision(decision));
 
         return NextResponse.json({ ok: true, seq: decision.seq });
     } catch (err) {

@@ -1,4 +1,4 @@
-import { authLead, fail, guarded, issue } from '@/lib/agent-api';
+import { authAgent, fail, guarded, issue } from '@/lib/agent-api';
 import { db } from '@/lib/supabase';
 
 import { z } from 'zod';
@@ -18,30 +18,31 @@ type Row = {
 };
 
 /**
- * Richie's decisions on tasks in the lead's projects, oldest first, after decision number `after`. Poll with the
- * last `seq` you saw (the answer's `next`) to get only what's new.
+ * Richie's decisions, oldest first, after decision number `after`: on the caller's own tasks, and for a lead on every
+ * task in its projects. Poll with the last `seq` you saw (the answer's `next`) to get only what's new.
  */
 export async function GET(req: Request) {
     return guarded(async () => {
-        const lead = await authLead(req);
-        if (lead instanceof Response) return lead;
+        const me = await authAgent(req);
+        if (me instanceof Response) return me;
         const parsed = Query.safeParse(Object.fromEntries(new URL(req.url).searchParams));
         if (!parsed.success) return fail(400, issue(parsed.error));
         const { after, limit } = parsed.data;
-        if (!lead.projects.length) return Response.json({ decisions: [], next: after });
+        if (me.lead && !me.projects.length) return Response.json({ decisions: [], next: after });
 
-        const { data, error } = await db()
+        const q = db()
             .from('decisions')
             .select(
-                'seq, action, comment, option_id, created_at, task:tasks!inner(id, title, project_id, project:projects(slug), owner:agents!owner_id(name))'
+                'seq, action, comment, option_id, created_at, task:tasks!inner(id, title, project_id, owner_id, project:projects(slug), owner:agents!owner_id(name))'
             )
-            .gt('seq', after)
-            .in(
-                'task.project_id',
-                lead.projects.map((p) => p.id)
-            )
-            .order('seq')
-            .limit(limit);
+            .gt('seq', after);
+        const scoped = me.lead
+            ? q.in(
+                  'task.project_id',
+                  me.projects.map((p) => p.id)
+              )
+            : q.eq('task.owner_id', me.id);
+        const { data, error } = await scoped.order('seq').limit(limit);
         if (error) throw new Error(error.message);
         const rows = data as unknown as Row[];
 

@@ -4,7 +4,8 @@ import {
     type TaskRow,
     agentsByName,
     apiTask,
-    authLead,
+    authAgent,
+    belongs,
     fail,
     guarded,
     issue,
@@ -25,13 +26,13 @@ const Filters = z.strictObject({
 });
 
 /**
- * Tasks in any project (leads read everything), newest change first. Filters: `project` (slug), `status`, `owner`
- * (agent name), `updated_after` (ISO time), `limit` (1–500, default 100).
+ * Tasks in any project (every agent reads everything), newest change first. Filters: `project` (slug), `status`,
+ * `owner` (agent name), `updated_after` (ISO time), `limit` (1–500, default 100).
  */
 export async function GET(req: Request) {
     return guarded(async () => {
-        const lead = await authLead(req);
-        if (lead instanceof Response) return lead;
+        const me = await authAgent(req);
+        if (me instanceof Response) return me;
         const parsed = Filters.safeParse(Object.fromEntries(new URL(req.url).searchParams));
         if (!parsed.success) return fail(400, issue(parsed.error));
         const f = parsed.data;
@@ -53,28 +54,37 @@ export async function GET(req: Request) {
 }
 
 /**
- * A new task in one of the lead's projects. `owner` (an agent's name) is whose work it is; with a `reviewer` the task
- * starts in Peer review, otherwise in Review (or the `status` given).
+ * A new task in a project the caller writes in. The caller is its creator and, unless a lead names another agent of
+ * the project as `owner`, its owner. With a `reviewer` the task starts in Peer review, otherwise in Review (or the
+ * `status` given).
  */
 export async function POST(req: Request) {
     return guarded(async () => {
-        const lead = await authLead(req);
-        if (lead instanceof Response) return lead;
+        const me = await authAgent(req);
+        if (me instanceof Response) return me;
         const body = await parseBody(req, TaskCreate);
         if (body instanceof Response) return body;
 
         const project = await db().from('projects').select('id, slug').eq('slug', body.project).maybeSingle();
         if (project.error) throw new Error(project.error.message);
         if (!project.data) return fail(400, `project: no project "${body.project}"`);
-        if (!writes(lead, project.data.id as string))
-            return fail(403, `${lead.name} can't write in ${body.project}; your projects: ${slugs(lead)}`);
+        const projectId = project.data.id as string;
+        if (!writes(me, projectId))
+            return fail(403, `${me.name} can't write in ${body.project}; your projects: ${slugs(me)}`);
 
         const agents = await agentsByName();
-        const owner = agents.get(body.owner.toLowerCase());
-        if (!owner) return fail(400, `owner: no agent named "${body.owner}"`);
+        let ownerId = me.id;
+        if (body.owner && body.owner.toLowerCase() !== me.name.toLowerCase()) {
+            if (!me.lead) return fail(403, 'owner: only a lead can give a task to another agent');
+            const owner = agents.get(body.owner.toLowerCase());
+            if (!owner) return fail(400, `owner: no agent named "${body.owner}"`);
+            if (!belongs(owner, projectId)) return fail(400, `owner: ${owner.name} isn't in ${body.project}`);
+            ownerId = owner.id;
+        }
         const reviewer = body.reviewer ? agents.get(body.reviewer.toLowerCase()) : undefined;
         if (body.reviewer && !reviewer) return fail(400, `reviewer: no agent named "${body.reviewer}"`);
-        if (reviewer && reviewer.id === owner.id) return fail(400, 'reviewer: must be someone other than the owner');
+        if (reviewer && (reviewer.id === ownerId || reviewer.id === me.id))
+            return fail(400, 'reviewer: must be someone other than the owner and the creator');
 
         // With a reviewer, work meant for Richie goes to the peer check first.
         let status = body.status ?? 'review';
@@ -88,10 +98,10 @@ export async function POST(req: Request) {
                 ...rest,
                 status,
                 images: images ?? [],
-                project_id: project.data.id,
-                owner_id: owner.id,
+                project_id: projectId,
+                owner_id: ownerId,
                 reviewer_id: reviewer?.id ?? null,
-                created_by: lead.id
+                created_by: me.id
             })
             .select(TASK_SELECT)
             .single();
@@ -101,4 +111,4 @@ export async function POST(req: Request) {
     });
 }
 
-const slugs = (lead: { projects: { slug: string }[] }) => lead.projects.map((p) => p.slug).join(', ') || 'none';
+const slugs = (me: { projects: { slug: string }[] }) => me.projects.map((p) => p.slug).join(', ') || 'none';

@@ -1,14 +1,14 @@
-import { authLead, guarded } from '@/lib/agent-api';
+import { authAgent, guarded } from '@/lib/agent-api';
 
-/** The lead behind the key, and the projects it writes in. */
+/** The agent behind the key, whether it leads, and the projects it may write in. */
 export async function GET(req: Request) {
     return guarded(async () => {
-        const lead = await authLead(req);
-        if (lead instanceof Response) return lead;
+        const me = await authAgent(req);
+        if (me instanceof Response) return me;
 
         return Response.json({
-            agent: { id: lead.id, name: lead.name },
-            projects: lead.projects.map(({ slug, name }) => ({ slug, name }))
+            agent: { id: me.id, name: me.name, lead: me.lead },
+            projects: me.projects.map(({ slug, name }) => ({ slug, name }))
         });
     });
 }
