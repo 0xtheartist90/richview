@@ -1,5 +1,3 @@
-import { after } from 'next/server';
-
 import {
     TASK_SELECT,
     TaskPatch,
@@ -15,7 +13,6 @@ import {
     taskRow,
     writes
 } from '@/lib/agent-api';
-import { runRecurring } from '@/lib/recurring';
 import { db } from '@/lib/supabase';
 
 type Params = { params: Promise<{ id: string }> };
@@ -50,7 +47,7 @@ export async function GET(req: Request, { params }: Params) {
 
 /**
  * Changes a task in a project the caller writes in: any field POST takes, including `reviewer` and `status` (never
- * rejected, and approved only on a routine's run, meaning done; otherwise those are Richie's), and for a lead `owner`. A task Richie already decided on can't be
+ * approved or rejected; those are Richie's), and for a lead `owner`. A task Richie already decided on can't be
  * changed.
  */
 export async function PATCH(req: Request, { params }: Params) {
@@ -89,9 +86,6 @@ export async function PATCH(req: Request, { params }: Params) {
         if (reviewerId && (reviewerId === ownerId || reviewerId === row.created_by))
             return fail(400, 'reviewer: must be someone other than the owner and the creator');
 
-        // Only Richie approves work; a routine's run is the one thing an agent marks done itself.
-        if (body.status === 'approved' && !row.recurring_id)
-            return fail(400, "status: approved is Richie's, except on a routine's run (then it means done)");
         if (body.status === 'peer_review') {
             if (!reviewerId) return fail(400, 'status: peer_review needs a reviewer');
             change.peer_checked_at = null;
@@ -110,8 +104,6 @@ export async function PATCH(req: Request, { params }: Params) {
             .maybeSingle();
         if (error) throw new Error(error.message);
         if (!data) return fail(409, 'Richie decided on this task in the meantime');
-        // A routine's late run done: today's may be made now instead of tomorrow.
-        if (body.status === 'approved' && row.recurring_id) after(() => runRecurring().then(() => undefined));
 
         return Response.json({ task: apiTask(data as TaskRow) });
     });

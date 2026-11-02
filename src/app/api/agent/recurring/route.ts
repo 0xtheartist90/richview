@@ -2,13 +2,13 @@ import { agentsByName, authAgent, belongs, fail, fields, guarded, issue, parseBo
 import {
     RECURRING_SELECT,
     type RecurringRow,
-    START_STATUSES,
     Schedule,
     apiRecurring,
-    dateIn,
+    recentRuns,
     scheduleColumns,
     validTimezone
 } from '@/lib/recurring';
+import { dateIn, statusOf } from '@/lib/schedule';
 import { db } from '@/lib/supabase';
 
 import { z } from 'zod';
@@ -21,18 +21,18 @@ const Create = z.strictObject({
     context: fields.context.optional(),
     priority: fields.priority.optional(),
     domain: fields.domain.optional(),
-    impact: fields.impact.optional(),
-    effort: fields.effort.optional(),
-    start_status: z.enum(START_STATUSES, `one of ${START_STATUSES.join(', ')}`).optional(),
     owner: fields.owner.optional(),
     reviewer: fields.reviewer.optional(),
     schedule: Schedule,
+    grace_minutes: z.number().int().min(0).max(1440, 'at most 1440').optional(),
     timezone: z.string().refine(validTimezone, 'a timezone, e.g. Asia/Bangkok').optional(),
-    allow_overlap: z.boolean().optional(),
     active: z.boolean().optional()
 });
 
-/** Every recurring template (any project), oldest first; `project` (slug) narrows it. */
+/**
+ * Every routine (any project) with where it stands now: state, next due time, 7-day hit rate and last run.
+ * `project` (slug) narrows it.
+ */
 export async function GET(req: Request) {
     return guarded(async () => {
         const me = await authAgent(req);
@@ -45,14 +45,26 @@ export async function GET(req: Request) {
         if (parsed.data.project) q = q.eq('project.slug', parsed.data.project);
         const { data, error } = await q;
         if (error) throw new Error(error.message);
+        const rows = data as RecurringRow[];
+        const runs = await recentRuns(rows.map((r) => r.id));
 
-        return Response.json({ recurring: (data as RecurringRow[]).map(apiRecurring) });
+        return Response.json({
+            recurring: rows.map((r) => {
+                const mine = runs.get(r.id) ?? [];
+
+                return apiRecurring(
+                    r,
+                    statusOf(r, mine),
+                    mine.find((x) => x.status !== 'missed')
+                );
+            })
+        });
     });
 }
 
 /**
- * A new recurring template in a project the caller writes in. Owner rules as for tasks: the caller, unless a lead
- * names another agent of the project. From its next due day on, the morning run turns it into a task.
+ * A new routine in a project the caller writes in. Owner rules as for tasks: the caller, unless a lead names another
+ * agent of the project. Its runs are reported with POST /api/agent/recurring/:id/runs.
  */
 export async function POST(req: Request) {
     return guarded(async () => {

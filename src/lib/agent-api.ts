@@ -177,10 +177,7 @@ export const TaskPatch = z
         title: fields.title.optional(),
         summary: fields.summary.nullable().optional(),
         description: fields.description.nullable().optional(),
-        /** approved only on a routine's run: the routine is done. */
-        status: z
-            .enum([...AGENT_STATUSES, 'approved'], `one of ${[...AGENT_STATUSES, 'approved'].join(', ')}`)
-            .optional(),
+        status: fields.status.optional(),
         priority: fields.priority.optional(),
         domain: fields.domain.nullable().optional(),
         impact: fields.impact.nullable().optional(),

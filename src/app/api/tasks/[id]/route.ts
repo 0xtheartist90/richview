@@ -2,7 +2,6 @@ import { NextResponse, after } from 'next/server';
 
 import { adminOpen } from '@/lib/admin';
 import { agentsByName, belongs, issue } from '@/lib/agent-api';
-import { runRecurring } from '@/lib/recurring';
 import { db } from '@/lib/supabase';
 import { TASK_STATUSES } from '@/lib/task-types';
 import { deleteTask, editTask } from '@/lib/tasks';
@@ -51,8 +50,6 @@ export async function PATCH(req: Request, { params }: Params) {
         after(async () => {
             if (result.decision) await notifyDecision(result.decision);
             if (result.change) await notifyChange(result.change);
-            // A routine's late run done: today's may be made now instead of tomorrow.
-            if (rest.status === 'approved') await runRecurring();
         });
 
         return NextResponse.json({ ok: true });

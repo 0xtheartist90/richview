@@ -338,19 +338,3 @@ export async function deleteTask(id: string): Promise<Change | null> {
         ownerId: (data.owner_id as string | null) ?? null
     };
 }
-
-/** The tasks these routines made in the last `days` days, newest first (for the Routines cockpit). */
-export async function getRuns(recurringIds: string[], days = 30): Promise<Task[]> {
-    if (!recurringIds.length) return [];
-    const since = new Date(Date.now() - days * 86_400_000).toISOString();
-    const { data, error } = await db()
-        .from('tasks')
-        .select(SELECT)
-        .in('recurring_id', recurringIds)
-        .neq('status', 'rejected')
-        .gte('created_at', since)
-        .order('created_at', { ascending: false });
-    if (error) throw new Error(error.message);
-
-    return (data as Row[]).map((r) => toTask(r, new Set()));
-}
