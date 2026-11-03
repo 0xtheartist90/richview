@@ -5,6 +5,7 @@
 // takes it back.
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 
 import { Hero, OwnerBadge, TaskChips, domainHex } from '@/components/review/parts';
@@ -12,7 +13,7 @@ import { PreviewSheet } from '@/components/review/preview-sheet';
 import type { DecisionAction, Task } from '@/lib/task-types';
 import { cn } from '@/lib/utils';
 
-import { Check, CheckCheck, Mic, RotateCcw, X } from 'lucide-react';
+import { Check, CheckCheck, Mic, Play, RotateCcw, SkipForward, X } from 'lucide-react';
 import {
     AnimatePresence,
     type MotionValue,
@@ -69,11 +70,23 @@ const isDecided = (id: string) => {
 const TOAST_TEXT: Record<DecisionAction, string> = {
     approved: 'Approved',
     changes_requested: 'Changes requested',
-    rejected: 'Rejected',
+    rejected: 'Turned down · archived',
     started: 'Started · In progress'
 };
 
-export function ReviewDeck({ initial, renderedAt }: { initial: Task[]; renderedAt: number }) {
+/** Which stack: finished work to review, or planned cards to start or turn down. */
+export type DeckMode = 'review' | 'planned';
+
+export function ReviewDeck({
+    initial,
+    renderedAt,
+    mode = 'review'
+}: {
+    initial: Task[];
+    renderedAt: number;
+    mode?: DeckMode;
+}) {
+    const planned = mode === 'planned';
     const router = useRouter();
     const [items, setItems] = useState(() => initial.filter((t) => !isDecided(t.id)));
     const [busy, setBusy] = useState(false);
@@ -229,11 +242,33 @@ export function ReviewDeck({ initial, renderedAt }: { initial: Task[]; renderedA
         setOpen(null);
         buzz(30);
         await fly(1);
-        decide(top, { action: 'approved' });
+        decide(top, { action: planned ? 'started' : 'approved' });
         setBusy(false);
     };
 
+    /** Planned, left: turned down (archived) straight away, with the same 5 seconds to Undo. */
+    const reject = async () => {
+        if (!top || busy) return;
+        hintSeen();
+        setBusy(true);
+        setOpen(null);
+        buzz([15, 40, 15]);
+        await fly(-1);
+        decide(top, { action: 'rejected' });
+        setBusy(false);
+    };
+
+    /** Planned: leaves the card where it is and puts it at the back of the stack. */
+    const skip = () => {
+        if (!top || busy || stack.length < 2) return;
+        hintSeen();
+        setOpen(null);
+        x.jump(0);
+        setItems((list) => [...list.filter((t) => t.id !== top.id), top]);
+    };
+
     const askChanges = () => {
+        if (planned) return void reject();
         if (!top || busy) return;
         hintSeen();
         setOpen(null);
@@ -274,7 +309,8 @@ export function ReviewDeck({ initial, renderedAt }: { initial: Task[]; renderedA
     return (
         <div className='mx-auto flex h-[calc(100dvh-3.5rem-1rem-5.5rem-env(safe-area-inset-bottom))] min-h-[28rem] w-full max-w-md flex-col lg:h-[calc(100dvh-4rem-3rem)]'>
             <header className='mb-3 flex items-center gap-3'>
-                <h1 className='label-hud text-white/55'>review</h1>
+                <h1 className='sr-only'>{planned ? 'Planned' : 'Review'}</h1>
+                <QueueTabs mode={mode} />
                 <span className='readout ml-auto text-sm text-white/45'>
                     <span className='text-glow text-base'>{stack.length}</span> waiting
                 </span>
@@ -311,6 +347,7 @@ export function ReviewDeck({ initial, renderedAt }: { initial: Task[]; renderedA
                                     onRight={approve}
                                     onLeft={askChanges}
                                     onBack={back}
+                                    planned={planned}
                                 />
                             ) : (
                                 <UnderCard key={task.id} task={task} depth={i} x={x} />
@@ -318,21 +355,21 @@ export function ReviewDeck({ initial, renderedAt }: { initial: Task[]; renderedA
                         )
                         .reverse()
                 ) : (
-                    <AllCaughtUp />
+                    <AllCaughtUp planned={planned} />
                 )}
                 {hint && top && (
                     <span className='pointer-events-none absolute inset-x-0 -bottom-1 z-10 mx-auto flex w-fit items-center gap-3 rounded-full border border-white/15 bg-black/70 px-4 py-2 text-sm font-medium text-white backdrop-blur-md'>
-                        <span className='text-rose-300'>← Changes</span>
+                        <span className='text-rose-300'>← {planned ? 'Turn down' : 'Changes'}</span>
                         <span className='text-white/30'>·</span>
-                        <span className='text-emerald-300'>Approve →</span>
+                        <span className='text-emerald-300'>{planned ? 'Start' : 'Approve'} →</span>
                     </span>
                 )}
             </div>
 
             <div className='flex items-start justify-center gap-5 pt-4'>
                 <RoundButton
-                    label='Ask for changes'
-                    caption='Changes'
+                    label={planned ? 'Turn down (archive)' : 'Ask for changes'}
+                    caption={planned ? 'Turn down' : 'Changes'}
                     onClick={askChanges}
                     disabled={!top || busy || !!asking}
                     className='size-16 border-rose-500/40 bg-rose-500/10 text-rose-400'>
@@ -346,17 +383,37 @@ export function ReviewDeck({ initial, renderedAt }: { initial: Task[]; renderedA
                     className='btn-key size-11'>
                     <RotateCcw className='size-4' />
                 </RoundButton>
+                {planned && (
+                    <RoundButton
+                        label='Skip, stays planned'
+                        caption='Skip'
+                        onClick={skip}
+                        disabled={!top || busy || stack.length < 2}
+                        className='btn-key size-11'>
+                        <SkipForward className='size-4' />
+                    </RoundButton>
+                )}
                 <RoundButton
-                    label='Approve'
-                    caption='Approve'
+                    label={planned ? 'Start: In progress' : 'Approve'}
+                    caption={planned ? 'Start' : 'Approve'}
                     onClick={() => void approve()}
                     disabled={!top || busy || !!asking}
                     className='size-16 border-emerald-500/40 bg-emerald-500/10 text-emerald-400'>
-                    <Check className='size-7' strokeWidth={2.5} />
+                    {planned ? (
+                        <Play className='size-6' strokeWidth={2.25} />
+                    ) : (
+                        <Check className='size-7' strokeWidth={2.5} />
+                    )}
                 </RoundButton>
             </div>
 
-            <PreviewSheet task={open} onClose={() => setOpen(null)} onApprove={approve} onChanges={askChanges} />
+            <PreviewSheet
+                task={open}
+                onClose={() => setOpen(null)}
+                onApprove={approve}
+                onChanges={askChanges}
+                labels={planned ? { no: 'Turn down', yes: 'Start' } : undefined}
+            />
             <ChangesSheet task={asking} onCancel={cancelAsk} onSave={(c) => void sendBack(c)} />
         </div>
     );
@@ -369,7 +426,8 @@ function TopCard({
     onTap,
     onRight,
     onLeft,
-    onBack
+    onBack,
+    planned
 }: {
     task: Task;
     x: MotionValue<number>;
@@ -378,6 +436,7 @@ function TopCard({
     onRight: () => void;
     onLeft: () => void;
     onBack: () => void;
+    planned: boolean;
 }) {
     const rotate = useTransform(x, [-320, 0, 320], [-14, 0, 14]);
     const approveIn = useTransform(x, [25, SWIPE], [0, 1]);
@@ -408,10 +467,10 @@ function TopCard({
             className='absolute inset-0 cursor-grab'>
             <Card task={task}>
                 <Stamp opacity={approveIn} className='top-8 left-6 -rotate-12 border-emerald-400 text-emerald-400'>
-                    Approved
+                    {planned ? 'Start' : 'Approved'}
                 </Stamp>
                 <Stamp opacity={changesIn} className='top-8 right-6 rotate-12 border-rose-400 text-rose-400'>
-                    Changes
+                    {planned ? 'No' : 'Changes'}
                 </Stamp>
             </Card>
         </motion.div>
@@ -520,7 +579,7 @@ function RoundButton({
     );
 }
 
-function AllCaughtUp() {
+function AllCaughtUp({ planned }: { planned: boolean }) {
     return (
         <motion.div
             initial={{ opacity: 0, scale: 0.9 }}
@@ -539,7 +598,9 @@ function AllCaughtUp() {
             </div>
             <div>
                 <p className='text-2xl font-light tracking-wide'>All caught up</p>
-                <p className='mt-1.5 text-sm text-white/50'>No work waiting for your review.</p>
+                <p className='mt-1.5 text-sm text-white/50'>
+                    {planned ? 'No planned cards waiting to start.' : 'No work waiting for your review.'}
+                </p>
             </div>
         </motion.div>
     );
@@ -705,5 +766,27 @@ function ChangesForm({
                 </button>
             </div>
         </form>
+    );
+}
+
+/** Review (finished work) or Planned (cards to start or turn down): two stacks on /review. */
+function QueueTabs({ mode }: { mode: DeckMode }) {
+    const tab = (m: DeckMode, href: string, label: string) => (
+        <Link
+            href={href}
+            aria-current={mode === m ? 'page' : undefined}
+            className={cn(
+                'inline-flex h-8 items-center rounded-lg px-3 text-sm font-medium',
+                mode === m ? 'btn-key' : 'text-white/50 hover:text-white/80'
+            )}>
+            {label}
+        </Link>
+    );
+
+    return (
+        <nav aria-label='Stacks' className='track inline-flex rounded-xl p-0.5'>
+            {tab('review', '/review', 'Review')}
+            {tab('planned', '/review?q=planned', 'Planned')}
+        </nav>
     );
 }

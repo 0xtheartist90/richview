@@ -1,9 +1,10 @@
 'use client';
 
-// /routines: every routine and check as a calm dashboard. On top the day in numbers; then filters and a search; then
-// the routines in sections by how often they come back (every few hours, daily, weekly), each a compact row (or a
-// card): its state today, when, who, the last and next run, and its 7-day hit rate. A row opens to its steps and run
-// history; "…" holds Log a run, Pause and Delete. Times are Bangkok time.
+// /routines: every routine and check as a cockpit. On top the day in numbers; then a search, filters and the kinds
+// (finance, ops, …) as chips; then the routines in sections, by how often they come back (every few hours, daily,
+// weekly) or by kind. Each is a tile (or, as an option, a compact row): its state today as a light and a dial, when
+// it's next due, who runs it and its last 7 days. A tile opens to its steps and run history; "…" holds Log a run,
+// Pause and Delete. Times are Bangkok time.
 import { useEffect, useMemo, useState } from 'react';
 
 import { useRouter } from 'next/navigation';
@@ -13,12 +14,26 @@ import type { Frequency, RoutineView } from '@/lib/recurring';
 import type { RoutineState } from '@/lib/schedule';
 import { cn } from '@/lib/utils';
 
-import { ChevronDown, LayoutGrid, List, MoreHorizontal, Search } from 'lucide-react';
+import {
+    CalendarClock,
+    Check,
+    ChevronDown,
+    Clock3,
+    LayoutGrid,
+    List,
+    MoreHorizontal,
+    Pause,
+    Search,
+    TriangleAlert
+} from 'lucide-react';
 import { toast } from 'sonner';
 
 const POLL_MS = 60_000;
 const TZ = 'Asia/Bangkok';
-const VIEW_KEY = 'routines-view';
+/** The viewer's choice of tiles or rows, and of grouping (tiles and frequency unless changed). */
+const VIEW_KEY = 'routines-view-v2';
+const GROUP_KEY = 'routines-group';
+const NO_KIND = '__none';
 
 const STATE: Record<RoutineState, { label: string; hex: string }> = {
     done: { label: 'Done', hex: '#34d399' },
@@ -86,24 +101,34 @@ export function RoutinesDashboard({
     const [frequency, setFrequency] = useState<Frequency | ''>('');
     const [status, setStatus] = useState<StatusKey>('all');
     const [query, setQuery] = useState('');
-    const [view, setView] = useState<'list' | 'cards'>('list');
+    const [kind, setKind] = useState<string | null>(null);
+    const [view, setView] = useState<'list' | 'cards'>('cards');
+    const [group, setGroup] = useState<'frequency' | 'kind'>('frequency');
     const [open, setOpen] = useState<string | null>(null);
 
     useEffect(() => setProject(initialProject ?? ''), [initialProject]);
     useEffect(() => {
         try {
-            if (localStorage.getItem(VIEW_KEY) === 'cards') setView('cards');
+            if (localStorage.getItem(VIEW_KEY) === 'list') setView('list');
+            if (localStorage.getItem(GROUP_KEY) === 'kind') setGroup('kind');
         } catch {
-            // No storage: the list it is.
+            // No storage: tiles by frequency.
         }
     }, []);
-    const pickView = (v: 'list' | 'cards') => {
-        setView(v);
+    const remember = (key: string, value: string) => {
         try {
-            localStorage.setItem(VIEW_KEY, v);
+            localStorage.setItem(key, value);
         } catch {
             // As above.
         }
+    };
+    const pickView = (v: 'list' | 'cards') => {
+        setView(v);
+        remember(VIEW_KEY, v);
+    };
+    const pickGroup = (g: 'frequency' | 'kind') => {
+        setGroup(g);
+        remember(GROUP_KEY, g);
     };
     useEffect(() => {
         const refresh = () => document.visibilityState === 'visible' && router.refresh();
@@ -117,16 +142,35 @@ export function RoutinesDashboard({
     }, [router]);
 
     const owners = useMemo(() => [...new Set(routines.map((r) => r.owner).filter(Boolean))].sort(), [routines]);
+    const scope = routines.filter((r) => !project || r.project.slug === project);
+    // The kinds in view, with how many each; routines without one under "No kind", last.
+    const kinds = useMemo(() => {
+        const count = new Map<string, number>();
+        for (const r of scope) count.set(r.domain || NO_KIND, (count.get(r.domain || NO_KIND) ?? 0) + 1);
+
+        return [...count.entries()].sort(
+            ([a], [b]) => Number(a === NO_KIND) - Number(b === NO_KIND) || a.localeCompare(b)
+        );
+    }, [scope]);
     const q = query.trim().toLowerCase();
-    const shown = routines.filter(
+    const shown = scope.filter(
         (r) =>
-            (!project || r.project.slug === project) &&
             (!owner || r.owner === owner) &&
             (!frequency || r.frequency === frequency) &&
+            (kind === null || (r.domain || NO_KIND) === kind) &&
             STATUS_FILTER[status].has(r.status.state) &&
-            (!q || `${r.title} ${r.summary} ${r.owner} ${r.reviewer}`.toLowerCase().includes(q))
+            (!q || `${r.title} ${r.summary} ${r.owner} ${r.reviewer} ${r.domain}`.toLowerCase().includes(q))
     );
-    const scope = routines.filter((r) => !project || r.project.slug === project);
+    const byTime = (a: RoutineView, b: RoutineView) =>
+        a.sortKey.localeCompare(b.sortKey) || a.title.localeCompare(b.title);
+    const sections =
+        group === 'frequency'
+            ? SECTIONS.map(({ key, label }) => ({ key, label, items: shown.filter((r) => r.frequency === key) }))
+            : kinds.map(([k]) => ({
+                  key: k,
+                  label: k === NO_KIND ? 'No kind' : k,
+                  items: shown.filter((r) => (r.domain || NO_KIND) === k)
+              }));
 
     return (
         <div className='mx-auto w-full max-w-md lg:max-w-none'>
@@ -176,13 +220,27 @@ export function RoutinesDashboard({
                             </option>
                         ))}
                     </Select>
+                    <div className='track flex shrink-0 rounded-xl p-1' role='group' aria-label='Group by'>
+                        {(['frequency', 'kind'] as const).map((g) => (
+                            <button
+                                key={g}
+                                onClick={() => pickGroup(g)}
+                                aria-pressed={group === g}
+                                className={cn(
+                                    'inline-flex h-8 items-center rounded-lg px-3 text-sm',
+                                    group === g ? 'btn-key' : 'text-white/50'
+                                )}>
+                                {g === 'frequency' ? 'By frequency' : 'By kind'}
+                            </button>
+                        ))}
+                    </div>
                     <div className='track flex shrink-0 rounded-xl p-1' role='group' aria-label='View'>
                         {(['list', 'cards'] as const).map((v) => (
                             <button
                                 key={v}
                                 onClick={() => pickView(v)}
                                 aria-pressed={view === v}
-                                aria-label={v === 'list' ? 'List' : 'Cards'}
+                                aria-label={v === 'list' ? 'Rows' : 'Tiles'}
                                 className={cn(
                                     'inline-flex size-8 items-center justify-center rounded-lg',
                                     view === v ? 'btn-key' : 'text-white/50'
@@ -194,11 +252,26 @@ export function RoutinesDashboard({
                 </div>
             </div>
 
+            {kinds.length > 1 && (
+                <div className='no-scrollbar -mx-4 mt-3 flex gap-2 overflow-x-auto px-4 lg:mx-0 lg:flex-wrap lg:px-0'>
+                    <KindChip active={kind === null} onClick={() => setKind(null)}>
+                        All kinds
+                    </KindChip>
+                    {kinds.map(([k, n]) => (
+                        <KindChip
+                            key={k}
+                            active={kind === k}
+                            hex={k === NO_KIND ? undefined : domainHex(k)}
+                            onClick={() => setKind(kind === k ? null : k)}>
+                            {k === NO_KIND ? 'No kind' : k} <span className='text-white/35'>{n}</span>
+                        </KindChip>
+                    ))}
+                </div>
+            )}
+
             {shown.length ? (
-                SECTIONS.map(({ key, label }) => {
-                    const items = shown
-                        .filter((r) => r.frequency === key)
-                        .sort((a, b) => a.sortKey.localeCompare(b.sortKey) || a.title.localeCompare(b.title));
+                sections.map(({ key, label, items: unsorted }) => {
+                    const items = [...unsorted].sort(byTime);
                     if (!items.length) return null;
 
                     return (
@@ -223,9 +296,9 @@ export function RoutinesDashboard({
                                     </ul>
                                 </div>
                             ) : (
-                                <div className='grid gap-3 sm:grid-cols-2 xl:grid-cols-3'>
+                                <div className='grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4'>
                                     {items.map((r) => (
-                                        <Card
+                                        <Tile
                                             key={r.id}
                                             routine={r}
                                             expanded={open === r.id}
@@ -456,7 +529,86 @@ function Row({
     );
 }
 
-function Card({
+/** "in 12m", "in 2h 15m", "in 3d": how long until a due time. */
+function until(iso: string | null) {
+    if (!iso) return '';
+    const min = Math.round((new Date(iso).getTime() - Date.now()) / 60_000);
+    if (min <= 0) return 'now';
+    if (min < 60) return `in ${min}m`;
+    if (min < 60 * 24) return `in ${Math.floor(min / 60)}h${min % 60 ? ` ${min % 60}m` : ''}`;
+
+    return `in ${Math.round(min / (60 * 24))}d`;
+}
+
+function StateIcon({ state, className }: { state: RoutineState; className?: string }) {
+    if (state === 'done' || state === 'on_track') return <Check className={className} />;
+    if (state === 'late' || state === 'failed') return <TriangleAlert className={className} />;
+    if (state === 'paused') return <Pause className={className} />;
+    if (state === 'not_today') return <CalendarClock className={className} />;
+
+    return <Clock3 className={className} />;
+}
+
+/** Today's due times covered, as a dial around the state's icon. */
+function Dial({ routine: r }: { routine: RoutineView }) {
+    const s = STATE[r.status.state];
+    const total = r.status.dueSoFar + r.status.remaining;
+    const part = total ? r.status.coveredSoFar / total : r.status.state === 'done' ? 1 : 0;
+    const R = 26;
+    const C = 2 * Math.PI * R;
+
+    return (
+        <div className='relative size-16 shrink-0'>
+            <svg viewBox='0 0 64 64' className='size-16 -rotate-90' aria-hidden>
+                <circle cx='32' cy='32' r={R} fill='none' stroke='rgb(0 0 0 / 0.35)' strokeWidth='5' />
+                {part > 0 && (
+                    <circle
+                        cx='32'
+                        cy='32'
+                        r={R}
+                        fill='none'
+                        stroke={s.hex}
+                        strokeWidth='5'
+                        strokeLinecap='round'
+                        strokeDasharray={`${C * part} ${C}`}
+                        style={{ filter: `drop-shadow(0 0 5px ${s.hex}99)` }}
+                    />
+                )}
+            </svg>
+            <span className='absolute inset-0 flex items-center justify-center' style={{ color: s.hex }}>
+                <StateIcon state={r.status.state} className='size-6' />
+            </span>
+        </div>
+    );
+}
+
+/** The last 7 days as bars: height and colour by how many due times a run covered (grey: nothing due). */
+function Week({ values }: { values: (number | null)[] }) {
+    return (
+        <span className='flex h-6 items-end gap-1' aria-label='Last 7 days'>
+            {values.map((v, i) => (
+                <span
+                    key={i}
+                    className='w-2 rounded-sm'
+                    style={{
+                        height: v === null ? 4 : `${Math.max(18, v * 100)}%`,
+                        background:
+                            v === null
+                                ? 'rgb(255 255 255 / 0.12)'
+                                : v >= 0.999
+                                  ? '#34d399'
+                                  : v >= 0.5
+                                    ? '#d4b062'
+                                    : '#f43f5e'
+                    }}
+                />
+            ))}
+        </span>
+    );
+}
+
+/** A routine as a cockpit tile: its kind, its state today as a light and a dial, when it's next due, who, its week. */
+function Tile({
     routine: r,
     expanded,
     onToggle,
@@ -467,46 +619,113 @@ function Card({
     onToggle: () => void;
     showProject: boolean;
 }) {
+    const s = STATE[r.status.state];
     const last = lastRun(r);
+    const alarm = r.status.state === 'late' || r.status.state === 'failed';
+    const total = r.status.dueSoFar + r.status.remaining;
 
     return (
         <article
             className={cn(
-                'bg-card panel overflow-hidden rounded-2xl border shadow-[var(--shadow-card)]',
-                !r.active && 'opacity-55'
-            )}>
-            <div className='flex items-start gap-2 p-4 pb-2'>
-                <div className='min-w-0 flex-1'>
-                    <StatePill state={r.status.state} />
-                    <button onClick={onToggle} className='mt-1.5 block w-full text-left' aria-expanded={expanded}>
-                        <span className='flex items-center gap-2'>
-                            <span className='truncate font-medium'>{r.title}</span>
-                            {showProject && <ProjectDot project={r.project} />}
-                        </span>
-                        {r.summary && <span className='block truncate text-[13px] text-white/50'>{r.summary}</span>}
-                    </button>
-                </div>
-                <Menu routine={r} />
+                'bg-card panel flex flex-col overflow-hidden rounded-2xl border shadow-[var(--shadow-card)] transition-shadow',
+                !r.active && 'opacity-55',
+                expanded && 'sm:col-span-2'
+            )}
+            style={
+                alarm
+                    ? { borderColor: `${s.hex}55`, boxShadow: `0 0 0 1px ${s.hex}22, 0 18px 40px -24px ${s.hex}88` }
+                    : undefined
+            }>
+            <div className='h-0.5' style={{ background: `linear-gradient(90deg, ${s.hex}, transparent)` }} />
+            <div className='flex items-center gap-2 px-4 pt-3'>
+                {r.domain ? (
+                    <span
+                        className='inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium'
+                        style={{
+                            borderColor: `${domainHex(r.domain)}55`,
+                            background: `${domainHex(r.domain)}1a`,
+                            color: domainHex(r.domain)
+                        }}>
+                        {r.domain}
+                    </span>
+                ) : (
+                    <span className='label-xs text-white/25'>no kind</span>
+                )}
+                {showProject && <ProjectDot project={r.project} />}
+                <span className='ml-auto'>
+                    <Menu routine={r} />
+                </span>
             </div>
-            <dl className='grid grid-cols-2 gap-x-3 gap-y-1.5 px-4 pb-4 text-xs'>
-                <Fact label='when' value={r.schedule} wide />
-                <Fact label='owner' value={<Person name={r.owner} />} />
-                <Fact label='reviewer' value={<Person name={r.reviewer} quiet />} />
-                <Fact label='last run' value={last ? when(last.ran_at) : '–'} />
-                <Fact label='next run' value={when(r.status.next)} />
-                <Fact
-                    label='7 days'
-                    wide
-                    value={
-                        <span className='flex items-center gap-2'>
-                            <Spark values={r.status.spark} className='h-4 w-16' />
+
+            <button
+                onClick={onToggle}
+                aria-expanded={expanded}
+                className='flex flex-1 flex-col gap-3 px-4 pt-1 pb-4 text-left'>
+                <span>
+                    <span className='block text-[17px] leading-snug font-medium'>{r.title}</span>
+                    {r.summary && <span className='block truncate text-[13px] text-white/50'>{r.summary}</span>}
+                </span>
+
+                <span className='flex items-center gap-3.5'>
+                    <Dial routine={r} />
+                    <span className='min-w-0'>
+                        <span className='block text-lg leading-tight font-light' style={{ color: s.hex }}>
+                            {s.label}
+                            {total > 1 && (
+                                <span className='readout ml-2 text-sm text-white/45'>
+                                    {r.status.coveredSoFar}/{total}
+                                </span>
+                            )}
+                        </span>
+                        <span className='mt-0.5 block truncate text-[13px] text-white/65'>{r.schedule}</span>
+                        <span className='readout mt-0.5 block text-xs text-white/45'>
+                            {r.status.next ? `next ${when(r.status.next)} · ${until(r.status.next)}` : 'not scheduled'}
+                        </span>
+                    </span>
+                </span>
+
+                <span className='mt-auto flex items-end justify-between gap-3 border-t border-white/[0.06] pt-3'>
+                    <span className='flex items-end gap-2.5'>
+                        <Week values={r.status.spark} />
+                        <span className='readout text-xs text-white/50'>
+                            <span className='block text-[10px] tracking-[0.1em] text-white/30 lowercase'>7 days</span>
                             {pct(r.status.hit7)}
                         </span>
-                    }
-                />
-            </dl>
+                    </span>
+                    <span className='flex min-w-0 flex-col items-end gap-1 text-right'>
+                        <Person name={r.owner} />
+                        <span className='readout text-[11px] text-white/40'>last {last ? when(last.ran_at) : '–'}</span>
+                    </span>
+                </span>
+            </button>
             {expanded && <Details routine={r} />}
         </article>
+    );
+}
+
+function KindChip({
+    active,
+    hex,
+    onClick,
+    children
+}: {
+    active: boolean;
+    hex?: string;
+    onClick: () => void;
+    children: React.ReactNode;
+}) {
+    return (
+        <button
+            onClick={onClick}
+            aria-pressed={active}
+            className={cn(
+                'inline-flex h-9 shrink-0 items-center gap-2 rounded-full border px-3.5 text-sm capitalize',
+                active ? 'text-white' : 'border-white/[0.08] text-white/60'
+            )}
+            style={active ? { borderColor: `${hex ?? '#ffffff'}80`, background: `${hex ?? '#ffffff'}1f` } : undefined}>
+            {hex && <span className='size-2 rounded-full' style={{ background: hex, boxShadow: `0 0 8px ${hex}99` }} />}
+            {children}
+        </button>
     );
 }
 

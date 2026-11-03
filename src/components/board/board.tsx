@@ -1,9 +1,9 @@
 'use client';
 
-// /board: one project at a time, in SRE's look. On a phone the statuses are folding panels one under the other, what
-// needs Richie on top; on a desktop they're columns side by side in a task's lifecycle order. The projects sit in a
-// rail on top (and in the sidebar on a desktop), each in its own colour, so it's always clear which one you're in.
-// Richie manages a card from its sheet, or on a desktop drags it to another column.
+// /board: one project at a time, in SRE's look, as a calm list like Routines: a folding section per status, what
+// needs Richie on top, each task a row (on a desktop with columns for owner, reviewer, priority, kind and last
+// change). The projects sit in a rail on top (and in the sidebar on a desktop), each in its own colour, so it's
+// always clear which one you're in. Richie manages a task from its sheet, or on a desktop drags it to another status.
 import { useEffect, useMemo, useState } from 'react';
 
 import Link from 'next/link';
@@ -12,7 +12,7 @@ import { useRouter } from 'next/navigation';
 import { type Member, TaskEditor, saveTask } from '@/components/board/task-editor';
 import { Avatar, domainHex } from '@/components/review/parts';
 import { PreviewSheet } from '@/components/review/preview-sheet';
-import { DESK_ORDER, PHONE_ORDER, STATUS_META, type Task, type TaskStatus } from '@/lib/task-types';
+import { PHONE_ORDER, STATUS_META, type Task, type TaskStatus } from '@/lib/task-types';
 import type { ProjectSummary } from '@/lib/tasks';
 import { cn } from '@/lib/utils';
 
@@ -76,7 +76,7 @@ export function Board({
         };
     }, [router]);
 
-    // Cards dragged to another column show there right away, until the next read has them.
+    // Tasks dragged to another status show there right away, until the next read has them.
     const [moved, setMoved] = useState<Record<string, TaskStatus>>({});
     useEffect(() => setMoved({}), [tasks]);
     const all = tasks.map((t) => (moved[t.id] ? { ...t, status: moved[t.id] } : t));
@@ -84,7 +84,7 @@ export function Board({
     const owners = useMemo(() => [...new Set(tasks.map((t) => t.owner).filter(Boolean))].sort(), [tasks]);
     const shown = owner ? all.filter((t) => t.owner === owner) : all;
 
-    /** A card dropped on another column. Changes requested needs a why, so that one opens the card instead. */
+    /** A task dropped on another status. Changes requested needs a why, so that one opens the task instead. */
     const move = async (id: string, to: TaskStatus) => {
         const task = all.find((t) => t.id === id);
         if (!task || task.status === to) return;
@@ -156,8 +156,8 @@ export function Board({
                 </div>
             )}
 
-            {/* Phone: folding panels, only the statuses that hold something. */}
-            <div className='mt-4 flex flex-col gap-3 lg:hidden'>
+            {/* A folding section per status that holds something, what needs Richie first. */}
+            <div className='mt-4 flex flex-col gap-3 lg:mt-5'>
                 {shown.length ? (
                     PHONE_ORDER.filter((s) => of(s).length).map((s) => (
                         <StatusPanel
@@ -167,18 +167,12 @@ export function Board({
                             folded={folded.has(s)}
                             onToggle={() => toggle(s)}
                             onOpen={setOpen}
+                            onDrop={move}
                         />
                     ))
                 ) : (
                     <Empty owner={owner} project={project.name} />
                 )}
-            </div>
-
-            {/* Desktop: every status a column, left to right as a task goes. */}
-            <div className='mt-5 hidden auto-cols-[minmax(10.5rem,1fr)] grid-flow-col items-start gap-3 overflow-x-auto pb-2 lg:grid'>
-                {DESK_ORDER.map((s) => (
-                    <StatusPanel key={s} status={s} tasks={of(s)} column onOpen={setOpen} onDrop={move} />
-                ))}
             </div>
 
             <PreviewSheet task={open} onClose={() => setOpen(null)}>
@@ -188,12 +182,11 @@ export function Board({
     );
 }
 
-/** One status: a header with its light and count, then its tasks (folding on a phone, a full column on a desktop). */
+/** One status: a header with its light and count, then its tasks as rows (folding). */
 function StatusPanel({
     status,
     tasks,
     folded = false,
-    column = false,
     onToggle,
     onOpen,
     onDrop
@@ -201,10 +194,9 @@ function StatusPanel({
     status: TaskStatus;
     tasks: Task[];
     folded?: boolean;
-    column?: boolean;
     onToggle?: () => void;
     onOpen: (t: Task) => void;
-    /** A desktop column: a card dragged onto it moves here. */
+    /** A task dragged onto this status (a desktop) moves here. */
     onDrop?: (id: string, to: TaskStatus) => void;
 }) {
     const meta = STATUS_META[status];
@@ -233,50 +225,50 @@ function StatusPanel({
             }
             className={cn(
                 'bg-card panel overflow-hidden rounded-2xl border shadow-[var(--shadow-card)] transition-colors',
-                column && 'flex max-h-[calc(100dvh-17rem)] flex-col',
                 over && 'border-[var(--brand)]/60 bg-[var(--brand)]/[0.06]'
             )}>
             <div className='h-0.5' style={{ background: `linear-gradient(90deg, ${meta.hex}, transparent)` }} />
             <div className='flex items-center'>
                 <button
                     onClick={onToggle}
-                    disabled={column}
-                    aria-expanded={column ? undefined : !folded}
-                    className={cn(
-                        'flex min-h-12 min-w-0 flex-1 items-center gap-2.5 text-left',
-                        column ? 'px-3' : 'px-4'
-                    )}>
+                    aria-expanded={!folded}
+                    className='flex min-h-12 min-w-0 flex-1 items-center gap-2.5 px-4 text-left'>
                     <Led hex={meta.hex} />
-                    <span className='truncate text-[15px] font-medium'>
-                        {column ? (meta.short ?? meta.label) : meta.label}
-                    </span>
+                    <span className='truncate text-[15px] font-medium'>{meta.label}</span>
                     <span className='readout rounded-md bg-white/[0.06] px-1.5 py-0.5 text-xs text-white/60'>
                         {tasks.length}
                     </span>
-                    {!column && (
-                        <ChevronDown
-                            className={cn('ml-auto size-4 text-white/40 transition-transform', folded && '-rotate-90')}
-                        />
-                    )}
+                    <ChevronDown
+                        className={cn('ml-auto size-4 text-white/40 transition-transform', folded && '-rotate-90')}
+                    />
                 </button>
                 {status === 'review' && tasks.length > 0 && (
                     <Link
                         href='/review'
                         aria-label='Swipe through review'
-                        className='btn-primary mr-2.5 inline-flex h-8 shrink-0 items-center gap-1 rounded-lg px-3 text-xs lg:w-8 lg:justify-center lg:px-0'>
-                        <span className='lg:hidden'>Swipe</span> <ArrowRight className='size-3.5' />
+                        className='btn-primary mr-2.5 inline-flex h-8 shrink-0 items-center gap-1 rounded-lg px-3 text-xs'>
+                        Swipe <ArrowRight className='size-3.5' />
                     </Link>
                 )}
             </div>
             {!folded && (
-                <ul className={cn('flex flex-col gap-1.5 px-2 pb-2', column && 'min-h-0 overflow-y-auto')}>
-                    {tasks.map((t) => (
-                        <li key={t.id}>
-                            <Row task={t} onOpen={() => onOpen(t)} draggable={!!onDrop} />
-                        </li>
-                    ))}
-                    {!tasks.length && <li className='label-xs px-2.5 pt-1 pb-3 text-white/30'>nothing here</li>}
-                </ul>
+                <>
+                    <div className={cn('label-xs hidden border-t px-4 py-2 text-white/35', ROW_GRID)}>
+                        <span>task</span>
+                        <span>owner</span>
+                        <span>reviewer</span>
+                        <span>priority</span>
+                        <span>kind</span>
+                        <span className='text-right'>changed</span>
+                    </div>
+                    <ul className='divide-y border-t'>
+                        {tasks.map((t) => (
+                            <li key={t.id}>
+                                <Row task={t} onOpen={() => onOpen(t)} draggable={!!onDrop} />
+                            </li>
+                        ))}
+                    </ul>
+                </>
             )}
         </section>
     );
@@ -377,58 +369,119 @@ function Empty({ owner, project }: { owner: string | null; project: string }) {
     );
 }
 
-/** One task: title, then owner, domain, priority and how long ago it changed. A tap opens it; on a desktop it drags. */
+const ROW_GRID = 'lg:grid lg:grid-cols-[minmax(0,1fr)_9rem_9rem_6.5rem_8rem_5rem] lg:items-center lg:gap-3';
+
+/** Marks after a title: peer checked or waiting for its reviewer, from a routine, sent back before. */
+function Marks({ task }: { task: Task }) {
+    return (
+        <>
+            {task.reviewer &&
+                (task.peerCheckedAt ? (
+                    <ShieldCheck
+                        className='size-3.5 shrink-0 text-emerald-300'
+                        aria-label={`Peer checked by ${task.reviewer}`}
+                    />
+                ) : (
+                    <UserCheck className='size-3.5 shrink-0 text-[#5fb8c2]' aria-label={`Reviewer: ${task.reviewer}`} />
+                ))}
+            {task.recurring && <Repeat className='size-3.5 shrink-0 text-white/45' aria-label='Recurring' />}
+            {task.returned && <RotateCcw className='size-3.5 shrink-0 text-[var(--bronze)]' aria-label='Returned' />}
+        </>
+    );
+}
+
+/**
+ * One task as a row: on a phone the title with its summary, then owner, priority and how long ago it changed; on a
+ * desktop the same in columns. A tap opens it; on a desktop it drags to another status.
+ */
 function Row({ task, onOpen, draggable }: { task: Task; onOpen: () => void; draggable?: boolean }) {
+    const hex = domainHex(task.domain);
+
     return (
         <button
             onClick={onOpen}
             draggable={draggable}
             onDragStart={draggable ? (e) => e.dataTransfer.setData('text/plain', task.id) : undefined}
             className={cn(
-                'flex w-full items-start gap-3 rounded-xl border border-white/[0.05] bg-white/[0.025] p-3 text-left transition-colors hover:bg-white/[0.05] active:bg-white/[0.07]',
-                draggable && 'cursor-grab active:cursor-grabbing'
+                'flex w-full items-start gap-3 px-4 py-3 text-left transition-colors hover:bg-white/[0.03] active:bg-white/[0.05] lg:py-2.5',
+                ROW_GRID,
+                draggable && 'lg:cursor-grab lg:active:cursor-grabbing'
             )}>
-            <span
-                className='mt-1 h-8 w-[3px] shrink-0 rounded-full'
-                style={{ background: domainHex(task.domain) }}
-                aria-hidden
-            />
-            <span className='min-w-0 flex-1'>
-                <span className='line-clamp-2 text-[14.5px] leading-snug font-medium lg:line-clamp-3'>
-                    {task.title}
-                </span>
-                <span className='mt-1.5 flex items-center gap-2 text-xs text-white/50'>
-                    {task.owner && (
-                        <span className='inline-flex min-w-0 items-center gap-1.5'>
-                            <Avatar name={task.owner} className='size-4 text-[9px]' />
-                            <span className='truncate'>{task.owner}</span>
+            <span className='flex min-w-0 items-start gap-3'>
+                <span
+                    className='mt-1 h-8 w-[3px] shrink-0 rounded-full lg:h-7'
+                    style={{ background: hex }}
+                    aria-hidden
+                />
+                <span className='min-w-0 flex-1'>
+                    <span className='flex items-center gap-1.5'>
+                        <span className='line-clamp-2 text-[14.5px] leading-snug font-medium lg:line-clamp-1'>
+                            {task.title}
                         </span>
-                    )}
-                    {task.domain && <span className='truncate lg:hidden'>· {task.domain}</span>}
-                    {PRIORITY_HEX[task.priority] && (
-                        <Flag className='size-3.5 shrink-0' style={{ color: PRIORITY_HEX[task.priority] }} />
-                    )}
-                    {task.reviewer &&
-                        (task.peerCheckedAt ? (
-                            <ShieldCheck
-                                className='size-3.5 shrink-0 text-emerald-300'
-                                aria-label={`Peer checked by ${task.reviewer}`}
-                            />
-                        ) : (
-                            <UserCheck
-                                className='size-3.5 shrink-0 text-[#5fb8c2]'
-                                aria-label={`Reviewer: ${task.reviewer}`}
-                            />
-                        ))}
-                    {task.recurring && <Repeat className='size-3.5 shrink-0 text-white/45' aria-label='Recurring' />}
-                    {task.returned && (
-                        <RotateCcw className='size-3.5 shrink-0 text-[var(--bronze)]' aria-label='Returned' />
-                    )}
-                    <span className='readout ml-auto shrink-0' suppressHydrationWarning>
-                        {ago(task.updatedAt)}
+                        <Marks task={task} />
+                    </span>
+                    {task.summary && <span className='block truncate text-[13px] text-white/45'>{task.summary}</span>}
+                    {/* Phone: the rest on one quiet line. */}
+                    <span className='mt-1.5 flex items-center gap-2 text-xs text-white/50 lg:hidden'>
+                        {task.owner && (
+                            <span className='inline-flex min-w-0 items-center gap-1.5'>
+                                <Avatar name={task.owner} className='size-4 text-[9px]' />
+                                <span className='truncate'>{task.owner}</span>
+                            </span>
+                        )}
+                        {task.domain && <span className='truncate'>· {task.domain}</span>}
+                        {PRIORITY_HEX[task.priority] && (
+                            <Flag className='size-3.5 shrink-0' style={{ color: PRIORITY_HEX[task.priority] }} />
+                        )}
+                        <span className='readout ml-auto shrink-0' suppressHydrationWarning>
+                            {ago(task.updatedAt)}
+                        </span>
                     </span>
                 </span>
             </span>
+            <Who name={task.owner} />
+            <Who name={task.reviewer} quiet />
+            <span className='hidden items-center gap-1.5 text-sm text-white/65 capitalize lg:flex'>
+                <Flag
+                    className='size-3.5'
+                    style={{ color: PRIORITY_HEX[task.priority] ?? 'rgb(255 255 255 / 0.25)' }}
+                />
+                {task.priority}
+            </span>
+            <span className='hidden min-w-0 lg:block'>
+                {task.domain ? (
+                    <span
+                        className='inline-flex max-w-full items-center truncate rounded-full border px-2 py-0.5 text-[11px] font-medium'
+                        style={{ borderColor: `${hex}55`, background: `${hex}1a`, color: hex }}>
+                        {task.domain}
+                    </span>
+                ) : (
+                    <span className='text-white/25'>–</span>
+                )}
+            </span>
+            <span className='readout hidden text-right text-sm text-white/50 lg:block' suppressHydrationWarning>
+                {ago(task.updatedAt)}
+            </span>
         </button>
+    );
+}
+
+/** A person in a desktop column, or a dash. */
+function Who({ name, quiet }: { name: string; quiet?: boolean }) {
+    return (
+        <span
+            className={cn(
+                'hidden min-w-0 items-center gap-1.5 text-sm lg:flex',
+                quiet ? 'text-white/55' : 'text-white/80'
+            )}>
+            {name ? (
+                <>
+                    <Avatar name={name} className='size-5 text-[10px]' />
+                    <span className='truncate'>{name}</span>
+                </>
+            ) : (
+                <span className='text-white/25'>–</span>
+            )}
+        </span>
     );
 }
