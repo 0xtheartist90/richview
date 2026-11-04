@@ -120,6 +120,42 @@ export async function notifyChange(c: Change): Promise<void> {
     }
 }
 
+/** Tells a routine's owner and the project's lead(s) that Richie asks for a change to it. */
+export async function notifyRoutineRequest(q: {
+    requestId: string;
+    routineId: string;
+    title: string;
+    project: string;
+    projectId: string;
+    ownerId: string;
+    request: string;
+}): Promise<void> {
+    try {
+        const { owner, targets } = await recipients(q.projectId, q.ownerId);
+        await Promise.all(
+            targets.map(({ hook, role }) =>
+                post(
+                    hook,
+                    JSON.stringify({
+                        event: 'routine_change_requested',
+                        role,
+                        by: 'Richie',
+                        requestId: q.requestId,
+                        routineId: q.routineId,
+                        project: q.project,
+                        title: q.title,
+                        owner: owner?.name ?? null,
+                        request: q.request
+                    }),
+                    `change request ${q.requestId}`
+                )
+            )
+        );
+    } catch (err) {
+        console.error(`Webhook change request ${q.requestId}:`, (err as Error).message);
+    }
+}
+
 async function post(hook: Hook, body: string, what: number | string): Promise<boolean> {
     const signature = hook.webhook_secret
         ? `sha256=${createHmac('sha256', hook.webhook_secret).update(body).digest('hex')}`

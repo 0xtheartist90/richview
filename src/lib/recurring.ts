@@ -3,7 +3,7 @@
 // the board: only a failed run, or one that didn't come in time, becomes a card on Review. Server only.
 import { type Rule, type RunLike, type Status, dateIn, statusOf, timeIn } from '@/lib/schedule';
 import { db } from '@/lib/supabase';
-import { notifyNewTask } from '@/lib/webhooks';
+import { notifyNewTask, notifyRoutineRequest } from '@/lib/webhooks';
 
 import 'server-only';
 import { z } from 'zod';
@@ -60,6 +60,9 @@ export type RecurringRow = Rule & {
     title: string;
     summary: string | null;
     description: string | null;
+    steps: string[];
+    checks: string[];
+    definition_of_done: string | null;
     context: string | null;
     priority: string;
     domain: string | null;
@@ -145,9 +148,18 @@ export function frequencyOf(r: Pick<RecurringRow, 'every' | 'times' | 'weekdays'
     return 'other';
 }
 
+/** What one check gave on a run. */
+export const CheckResult = z.strictObject({
+    check: z.string().trim().min(1, 'is required').max(500, 'at most 500 characters'),
+    ok: z.boolean('true or false'),
+    note: z.string().trim().max(1000, 'at most 1000 characters').optional()
+});
+export type CheckResult = z.infer<typeof CheckResult>;
+
 export type RunRow = RunLike & {
     id: string;
     note: string | null;
+    check_results: CheckResult[];
     agent: { name: string } | null;
     task_id: string | null;
 };
@@ -159,7 +171,7 @@ export async function recentRuns(ids: string[]): Promise<Map<string, RunRow[]>> 
     const since = new Date(Date.now() - 8 * 86_400_000).toISOString();
     const { data, error } = await db()
         .from('routine_runs')
-        .select('id, recurring_id, status, due_at, ran_at, note, task_id, agent:agents(name)')
+        .select('id, recurring_id, status, due_at, ran_at, note, check_results, task_id, agent:agents(name)')
         .in('recurring_id', ids)
         .gte('ran_at', since)
         .order('ran_at', { ascending: false });
@@ -176,6 +188,9 @@ export function apiRecurring(r: RecurringRow, status?: Status, last?: RunRow) {
         title: r.title,
         summary: r.summary,
         description: r.description,
+        steps: r.steps,
+        checks: r.checks,
+        definition_of_done: r.definition_of_done,
         context: r.context,
         priority: r.priority,
         domain: r.domain,
@@ -191,7 +206,9 @@ export function apiRecurring(r: RecurringRow, status?: Status, last?: RunRow) {
                   state: status.state,
                   next_due: status.next?.toISOString() ?? null,
                   hit_rate_7d: status.hit7,
-                  last_run: last ? { status: last.status, ran_at: last.ran_at, note: last.note } : null
+                  last_run: last
+                      ? { status: last.status, ran_at: last.ran_at, note: last.note, checks: last.check_results }
+                      : null
               }
             : {}),
         created_at: r.created_at,
@@ -248,10 +265,12 @@ async function raiseCard(r: RecurringRow, kind: 'failed' | 'late', due: Date | n
 /** A run an agent reports. A failed one also goes to Review. */
 export async function reportRun(
     r: RecurringRow,
-    run: { status: 'ok' | 'failed'; note?: string; ran_at?: string; agentId: string | null }
+    run: { status: 'ok' | 'failed'; note?: string; checks?: CheckResult[]; ran_at?: string; agentId: string | null }
 ): Promise<RunRow & { review_task: string | null }> {
     const ranAt = run.ran_at ?? new Date().toISOString();
-    const task = run.status === 'failed' ? await raiseCard(r, 'failed', null, run.note ?? null) : null;
+    const failed = (run.checks ?? []).filter((c) => !c.ok).map((c) => (c.note ? `${c.check}: ${c.note}` : c.check));
+    const why = run.note ?? (failed.length ? `Failed checks: ${failed.join('; ')}` : null);
+    const task = run.status === 'failed' ? await raiseCard(r, 'failed', null, why) : null;
     const { data, error } = await db()
         .from('routine_runs')
         .insert({
@@ -259,10 +278,11 @@ export async function reportRun(
             status: run.status,
             ran_at: ranAt,
             note: run.note ?? null,
+            check_results: run.checks ?? [],
             agent_id: run.agentId,
             task_id: task
         })
-        .select('id, status, due_at, ran_at, note, task_id, agent:agents(name)')
+        .select('id, status, due_at, ran_at, note, check_results, task_id, agent:agents(name)')
         .single();
     if (error) throw new Error(error.message);
 
@@ -309,6 +329,115 @@ export async function checkRoutines(now = new Date()): Promise<{ late: string[] 
     return { late };
 }
 
+// ---- Change requests and history ---------------------------------------------------------------------------------
+
+export type RequestRow = {
+    id: string;
+    recurring_id: string;
+    body: string;
+    status: 'open' | 'done' | 'declined';
+    reply: string | null;
+    created_at: string;
+    resolved_at: string | null;
+    resolver: { name: string } | null;
+};
+export const REQUEST_SELECT =
+    'id, recurring_id, body, status, reply, created_at, resolved_at, resolver:agents!resolved_by(name)';
+
+export const apiRequest = (x: RequestRow) => ({
+    id: x.id,
+    routine: x.recurring_id,
+    request: x.body,
+    status: x.status,
+    reply: x.reply,
+    created_at: x.created_at,
+    resolved_at: x.resolved_at,
+    resolved_by: x.resolver?.name ?? null
+});
+
+type ChangeRow = {
+    id: string;
+    recurring_id: string;
+    field: string;
+    before: string | string[] | null;
+    after: string | string[] | null;
+    created_at: string;
+    agent: { name: string } | null;
+};
+
+export const apiChange = (x: ChangeRow) => ({
+    field: x.field,
+    before: x.before,
+    after: x.after,
+    agent: x.agent?.name ?? null,
+    created_at: x.created_at
+});
+
+/** The change requests and the history of these routines, newest first. */
+export async function playbookLog(ids: string[]) {
+    const requests = new Map<string, RequestRow[]>(ids.map((id) => [id, []]));
+    const changes = new Map<string, ChangeRow[]>(ids.map((id) => [id, []]));
+    if (!ids.length) return { requests, changes };
+    const [req, chg] = await Promise.all([
+        db()
+            .from('routine_requests')
+            .select(REQUEST_SELECT)
+            .in('recurring_id', ids)
+            .order('created_at', { ascending: false })
+            .limit(500),
+        db()
+            .from('routine_changes')
+            .select('id, recurring_id, field, before, after, created_at, agent:agents(name)')
+            .in('recurring_id', ids)
+            .order('created_at', { ascending: false })
+            .limit(500)
+    ]);
+    if (req.error) throw new Error(req.error.message);
+    if (chg.error) throw new Error(chg.error.message);
+    for (const x of req.data as unknown as RequestRow[]) requests.get(x.recurring_id)?.push(x);
+    for (const x of chg.data as unknown as ChangeRow[]) changes.get(x.recurring_id)?.push(x);
+
+    return { requests, changes };
+}
+
+/** A change Richie asks for: stored as open, and sent to the routine's owner and the project's lead(s). */
+export async function addRequest(r: RecurringRow, body: string) {
+    const { data, error } = await db()
+        .from('routine_requests')
+        .insert({ recurring_id: r.id, body })
+        .select(REQUEST_SELECT)
+        .single();
+    if (error) throw new Error(error.message);
+    const request = data as unknown as RequestRow;
+    await notifyRoutineRequest({
+        requestId: request.id,
+        routineId: r.id,
+        title: r.title,
+        project: r.project?.slug ?? '',
+        projectId: r.project_id,
+        ownerId: r.owner_id,
+        request: body
+    });
+
+    return request;
+}
+
+const LOGGED = ['steps', 'checks', 'definition_of_done', 'description'] as const;
+
+/** Notes what changed in a routine's steps, checks, definition of done or description. A failure is only logged. */
+export async function logChanges(before: RecurringRow, after: RecurringRow, agentId: string) {
+    const rows = LOGGED.filter((f) => JSON.stringify(before[f]) !== JSON.stringify(after[f])).map((field) => ({
+        recurring_id: before.id,
+        field,
+        before: before[field],
+        after: after[field],
+        agent_id: agentId
+    }));
+    if (!rows.length) return;
+    const { error } = await db().from('routine_changes').insert(rows);
+    if (error) console.error(`History of "${before.title}":`, error.message);
+}
+
 // ---- The cockpit -------------------------------------------------------------------------------------------------
 
 export type RoutineView = {
@@ -317,6 +446,9 @@ export type RoutineView = {
     title: string;
     summary: string;
     description: string;
+    steps: string[];
+    checks: string[];
+    definitionOfDone: string;
     /** Its kind (finance, ops, …): the routine's domain, or '' when none is set. */
     domain: string;
     schedule: string;
@@ -333,8 +465,28 @@ export type RoutineView = {
         ran_at: string;
         due_at: string | null;
         note: string | null;
+        checks: CheckResult[];
         agent: string | null;
         task_id: string | null;
+    }[];
+    /** The changes Richie asked for, newest first. */
+    requests: {
+        id: string;
+        body: string;
+        status: RequestRow['status'];
+        reply: string | null;
+        by: string | null;
+        created_at: string;
+        resolved_at: string | null;
+    }[];
+    /** What changed in its steps, checks, definition of done or description, newest first. */
+    changes: {
+        id: string;
+        field: string;
+        before: string | string[] | null;
+        after: string | string[] | null;
+        agent: string | null;
+        created_at: string;
     }[];
 };
 
@@ -343,7 +495,8 @@ export async function getRoutines(now = new Date()): Promise<RoutineView[]> {
     const { data, error } = await db().from('recurring').select(RECURRING_SELECT).order('created_at');
     if (error) throw new Error(error.message);
     const rows = data as RecurringRow[];
-    const runs = await recentRuns(rows.map((r) => r.id));
+    const ids = rows.map((r) => r.id);
+    const [runs, log] = await Promise.all([recentRuns(ids), playbookLog(ids)]);
 
     return rows.map((r) => {
         const mine = runs.get(r.id) ?? [];
@@ -355,6 +508,9 @@ export async function getRoutines(now = new Date()): Promise<RoutineView[]> {
             title: r.title,
             summary: r.summary ?? '',
             description: r.description ?? '',
+            steps: r.steps,
+            checks: r.checks,
+            definitionOfDone: r.definition_of_done ?? '',
             domain: (r.domain ?? '').trim().toLowerCase(),
             schedule: describe(r),
             frequency: frequencyOf(r),
@@ -369,8 +525,26 @@ export async function getRoutines(now = new Date()): Promise<RoutineView[]> {
                 ran_at: x.ran_at,
                 due_at: x.due_at,
                 note: x.note,
+                checks: x.check_results,
                 agent: x.agent?.name ?? null,
                 task_id: x.task_id
+            })),
+            requests: (log.requests.get(r.id) ?? []).map((x) => ({
+                id: x.id,
+                body: x.body,
+                status: x.status,
+                reply: x.reply,
+                by: x.resolver?.name ?? null,
+                created_at: x.created_at,
+                resolved_at: x.resolved_at
+            })),
+            changes: (log.changes.get(r.id) ?? []).map((x) => ({
+                id: x.id,
+                field: x.field,
+                before: x.before,
+                after: x.after,
+                agent: x.agent?.name ?? null,
+                created_at: x.created_at
             }))
         };
     });
