@@ -3,8 +3,8 @@
 // /routines: every routine and check as a cockpit. On top the day in numbers; then a search, filters and the kinds
 // (finance, ops, …) as chips; then the routines in sections, by how often they come back (every few hours, daily,
 // weekly) or by kind. Each is a tile (or, as an option, a compact row): its state today as a light and a dial, when
-// it's next due, who runs it and its last 7 days. A tile opens to its steps and run history; "…" holds Log a run,
-// Pause and Delete. Times are Bangkok time.
+// it's next due, who runs it and its last 7 days. A tile opens to its steps, checks and definition of done, a box to
+// request a change, its runs and its history; "…" holds Log a run, Pause and Delete. Times are Bangkok time.
 import { useEffect, useMemo, useState } from 'react';
 
 import { useRouter } from 'next/navigation';
@@ -24,7 +24,8 @@ import {
     MoreHorizontal,
     Pause,
     Search,
-    TriangleAlert
+    TriangleAlert,
+    X
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -159,7 +160,10 @@ export function RoutinesDashboard({
             (!frequency || r.frequency === frequency) &&
             (kind === null || (r.domain || NO_KIND) === kind) &&
             STATUS_FILTER[status].has(r.status.state) &&
-            (!q || `${r.title} ${r.summary} ${r.owner} ${r.reviewer} ${r.domain}`.toLowerCase().includes(q))
+            (!q ||
+                `${r.title} ${r.summary} ${r.owner} ${r.reviewer} ${r.domain} ${r.steps.join(' ')} ${r.checks.join(' ')}`
+                    .toLowerCase()
+                    .includes(q))
     );
     const byTime = (a: RoutineView, b: RoutineView) =>
         a.sortKey.localeCompare(b.sortKey) || a.title.localeCompare(b.title);
@@ -486,6 +490,7 @@ function Row({
                         <span className='flex items-center gap-2'>
                             <span className='truncate font-medium'>{r.title}</span>
                             {showProject && <ProjectDot project={r.project} />}
+                            <Flags routine={r} />
                             <ChevronDown
                                 className={cn(
                                     'size-3.5 shrink-0 text-white/30 transition-transform',
@@ -652,6 +657,7 @@ function Tile({
                     <span className='label-xs text-white/25'>no kind</span>
                 )}
                 {showProject && <ProjectDot project={r.project} />}
+                <Flags routine={r} />
                 <span className='ml-auto'>
                     <Menu routine={r} />
                 </span>
@@ -764,50 +770,281 @@ function ProjectDot({ project }: { project: { slug: string; name: string } }) {
 
 const RUN_HEX: Record<string, string> = { ok: '#34d399', failed: '#f43f5e', missed: '#c98a5a' };
 
-/** Opened: the steps (description) and the run history. */
-function Details({ routine: r }: { routine: RoutineView }) {
+/** A routine whose steps and checks are still missing, or with changes waiting, says so on its tile or row. */
+function Flags({ routine: r }: { routine: RoutineView }) {
+    const open = r.requests.filter((x) => x.status === 'open').length;
+
     return (
-        <div className='grid gap-4 border-t bg-black/15 px-4 py-4 lg:grid-cols-2'>
-            <div>
-                <p className='label-xs mb-1.5 text-white/40'>steps · definition of done</p>
-                <p className='text-sm leading-relaxed whitespace-pre-wrap text-white/75'>
-                    {r.description || 'No description yet.'}
-                </p>
-            </div>
-            <div>
-                <p className='label-xs mb-1.5 text-white/40'>
-                    runs · {r.status.coveredSoFar}/{r.status.dueSoFar} today so far
-                    {r.status.remaining ? ` · ${r.status.remaining} to come` : ''}
-                </p>
-                {r.runs.length ? (
-                    <ul className='flex flex-col gap-1'>
-                        {r.runs.slice(0, 10).map((x) => (
-                            <li key={x.id} className='flex items-start gap-2 text-sm'>
-                                <span
-                                    className='mt-1.5 size-1.5 shrink-0 rounded-full'
-                                    style={{ background: RUN_HEX[x.status] }}
-                                />
-                                {/* A missed one shows the due time nobody covered; a reported one when it ran. */}
-                                <span className='readout w-28 shrink-0 text-white/55'>
-                                    {when(x.status === 'missed' ? x.due_at : x.ran_at)}
-                                </span>
-                                <span className='min-w-0 text-white/75'>
-                                    {x.status === 'missed'
-                                        ? 'Missed · sent to Review'
-                                        : x.status === 'failed'
-                                          ? 'Failed'
-                                          : 'Ok'}
-                                    {x.agent && <span className='text-white/40'> · {x.agent}</span>}
-                                    {x.note && <span className='block truncate text-white/50'>{x.note}</span>}
-                                </span>
-                            </li>
-                        ))}
-                    </ul>
-                ) : (
-                    <p className='text-sm text-white/40'>No runs reported yet.</p>
+        <>
+            {!r.steps.length && !r.checks.length && (
+                <span className='shrink-0 rounded-full border border-amber-300/25 px-2 py-0.5 text-[11px] text-amber-200/80'>
+                    no steps
+                </span>
+            )}
+            {open > 0 && (
+                <span className='shrink-0 rounded-full border border-[var(--brand)]/40 px-2 py-0.5 text-[11px] text-[var(--brand)]'>
+                    {open} change{open > 1 ? 's' : ''} open
+                </span>
+            )}
+        </>
+    );
+}
+
+const NotDocumented = () => <p className='text-sm text-amber-200/70'>Not documented yet.</p>;
+
+/** Opened: what it does (steps, checks, definition of done), the changes asked for, its runs and its history. */
+function Details({ routine: r }: { routine: RoutineView }) {
+    const last = lastRun(r);
+    const results = new Map(last?.checks.map((c) => [c.check, c]));
+
+    return (
+        <div className='grid gap-5 border-t bg-black/15 px-4 py-4 lg:grid-cols-2'>
+            <div className='flex min-w-0 flex-col gap-4'>
+                {r.description && (
+                    <div>
+                        <p className='label-xs mb-1.5 text-white/40'>what it does</p>
+                        <p className='text-sm leading-relaxed whitespace-pre-wrap text-white/75'>{r.description}</p>
+                    </div>
                 )}
+                <div>
+                    <p className='label-xs mb-1.5 text-white/40'>steps</p>
+                    {r.steps.length ? (
+                        <ol className='flex flex-col gap-1.5'>
+                            {r.steps.map((s, i) => (
+                                <li key={i} className='flex gap-2.5 text-sm leading-snug text-white/80'>
+                                    <span className='readout w-4 shrink-0 text-right text-white/40'>{i + 1}</span>
+                                    <span className='min-w-0'>{s}</span>
+                                </li>
+                            ))}
+                        </ol>
+                    ) : (
+                        <NotDocumented />
+                    )}
+                </div>
+                <div>
+                    <p className='label-xs mb-1.5 text-white/40'>
+                        checks{last?.checks.length ? ` · last run ${when(last.ran_at)}` : ''}
+                    </p>
+                    {r.checks.length ? (
+                        <ul className='flex flex-col gap-1.5'>
+                            {r.checks.map((c, i) => {
+                                const result = results.get(c);
+
+                                return (
+                                    <li key={i} className='flex gap-2 text-sm leading-snug text-white/80'>
+                                        <CheckMark ok={result?.ok} />
+                                        <span className='min-w-0'>
+                                            {c}
+                                            {result?.note && (
+                                                <span className='block text-[13px] text-white/50'>{result.note}</span>
+                                            )}
+                                        </span>
+                                    </li>
+                                );
+                            })}
+                        </ul>
+                    ) : (
+                        <NotDocumented />
+                    )}
+                </div>
+                <div>
+                    <p className='label-xs mb-1.5 text-white/40'>definition of done</p>
+                    {r.definitionOfDone ? (
+                        <p className='text-sm leading-relaxed whitespace-pre-wrap text-white/80'>
+                            {r.definitionOfDone}
+                        </p>
+                    ) : (
+                        <NotDocumented />
+                    )}
+                </div>
+            </div>
+
+            <div className='flex min-w-0 flex-col gap-4'>
+                <Requests routine={r} />
+                <div>
+                    <p className='label-xs mb-1.5 text-white/40'>
+                        runs · {r.status.coveredSoFar}/{r.status.dueSoFar} today so far
+                        {r.status.remaining ? ` · ${r.status.remaining} to come` : ''}
+                    </p>
+                    <Runs routine={r} />
+                </div>
+                {r.changes.length > 0 && <History routine={r} />}
             </div>
         </div>
+    );
+}
+
+/** A check's result on the last run: passed, failed, or nothing reported. */
+function CheckMark({ ok }: { ok?: boolean }) {
+    if (ok === undefined) return <span className='mt-[7px] mr-1 ml-1 size-1.5 shrink-0 rounded-full bg-white/25' />;
+
+    return ok ? (
+        <Check className='mt-0.5 size-3.5 shrink-0 text-emerald-400' aria-label='Passed' />
+    ) : (
+        <X className='mt-0.5 size-3.5 shrink-0 text-rose-400' aria-label='Failed' />
+    );
+}
+
+const REQUEST_STATE = {
+    open: { label: 'Open', className: 'text-[var(--brand)]' },
+    done: { label: 'Done', className: 'text-emerald-400' },
+    declined: { label: 'Declined', className: 'text-white/50' }
+} as const;
+
+/** Ask the owner for a change, and what came of earlier requests. */
+function Requests({ routine: r }: { routine: RoutineView }) {
+    const router = useRouter();
+    const [text, setText] = useState('');
+    const [busy, setBusy] = useState(false);
+    const send = async () => {
+        setBusy(true);
+        const res = await fetch(`/api/admin/recurring/${r.id}/requests`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ request: text })
+        }).catch(() => null);
+        setBusy(false);
+        if (!res?.ok) {
+            const { error } = ((await res?.json().catch(() => null)) ?? {}) as { error?: string };
+
+            return void toast.error(error ?? 'No connection');
+        }
+        setText('');
+        toast('Change requested', { description: r.owner ? `Sent to ${r.owner}` : r.title });
+        router.refresh();
+    };
+
+    return (
+        <div>
+            <p className='label-xs mb-1.5 text-white/40'>request a change</p>
+            <textarea
+                value={text}
+                onChange={(e) => setText(e.target.value)}
+                rows={2}
+                maxLength={2000}
+                placeholder='What should change in this routine?'
+                aria-label={`Request a change to ${r.title}`}
+                className='track w-full resize-y rounded-xl px-3 py-2 text-sm outline-none placeholder:text-white/35 focus:ring-2 focus:ring-[var(--ring)]'
+            />
+            <button
+                onClick={send}
+                disabled={busy || !text.trim()}
+                className='btn-key mt-1.5 inline-flex h-9 items-center rounded-lg px-3.5 text-sm disabled:opacity-40'>
+                Request change
+            </button>
+            {r.requests.length > 0 && (
+                <ul className='mt-3 flex flex-col gap-2.5'>
+                    {r.requests.slice(0, 10).map((x) => (
+                        <li key={x.id} className='text-sm'>
+                            <span className='flex items-center gap-2 text-xs'>
+                                <span className={REQUEST_STATE[x.status].className}>
+                                    {REQUEST_STATE[x.status].label}
+                                </span>
+                                <span className='readout text-white/40'>{when(x.created_at)}</span>
+                            </span>
+                            <span className='block whitespace-pre-wrap text-white/80'>{x.body}</span>
+                            {x.reply && (
+                                <span className='mt-0.5 block text-[13px] whitespace-pre-wrap text-white/50'>
+                                    {x.by ? `${x.by}: ` : ''}
+                                    {x.reply}
+                                </span>
+                            )}
+                        </li>
+                    ))}
+                </ul>
+            )}
+        </div>
+    );
+}
+
+const FIELD_LABEL: Record<string, string> = {
+    steps: 'Steps',
+    checks: 'Checks',
+    definition_of_done: 'Definition of done',
+    description: 'Description'
+};
+
+/** What changed in the routine, and who changed it. */
+function History({ routine: r }: { routine: RoutineView }) {
+    return (
+        <div>
+            <p className='label-xs mb-1.5 text-white/40'>history</p>
+            <ul className='flex flex-col gap-2'>
+                {r.changes.slice(0, 10).map((x) => {
+                    const before = Array.isArray(x.before) ? x.before : [];
+                    const after = Array.isArray(x.after) ? x.after : [];
+                    const added = after.filter((l) => !before.includes(l));
+                    const removed = before.filter((l) => !after.includes(l));
+
+                    return (
+                        <li key={x.id} className='text-sm'>
+                            <span className='text-white/75'>
+                                {FIELD_LABEL[x.field] ?? x.field} changed
+                                {x.agent && <span className='text-white/40'> · {x.agent}</span>}
+                            </span>
+                            <span className='readout ml-2 text-xs text-white/40'>{when(x.created_at)}</span>
+                            {added.map((l, i) => (
+                                <span key={`a${i}`} className='block text-[13px] text-emerald-300/80'>
+                                    + {l}
+                                </span>
+                            ))}
+                            {removed.map((l, i) => (
+                                <span key={`r${i}`} className='block text-[13px] text-rose-300/80'>
+                                    − {l}
+                                </span>
+                            ))}
+                        </li>
+                    );
+                })}
+            </ul>
+        </div>
+    );
+}
+
+function Runs({ routine: r }: { routine: RoutineView }) {
+    return (
+        <>
+            {r.runs.length ? (
+                <ul className='flex flex-col gap-1'>
+                    {r.runs.slice(0, 10).map((x) => (
+                        <li key={x.id} className='flex items-start gap-2 text-sm'>
+                            <span
+                                className='mt-1.5 size-1.5 shrink-0 rounded-full'
+                                style={{ background: RUN_HEX[x.status] }}
+                            />
+                            {/* A missed one shows the due time nobody covered; a reported one when it ran. */}
+                            <span className='readout w-28 shrink-0 text-white/55'>
+                                {when(x.status === 'missed' ? x.due_at : x.ran_at)}
+                            </span>
+                            <span className='min-w-0 text-white/75'>
+                                {x.status === 'missed'
+                                    ? 'Missed · sent to Review'
+                                    : x.status === 'failed'
+                                      ? 'Failed'
+                                      : 'Ok'}
+                                {x.agent && <span className='text-white/40'> · {x.agent}</span>}
+                                {x.note && <span className='block truncate text-white/50'>{x.note}</span>}
+                                {x.checks.length > 0 && (
+                                    <span className='block text-[13px] text-white/50'>
+                                        {x.checks.filter((c) => c.ok).length}/{x.checks.length} checks ok
+                                    </span>
+                                )}
+                                {x.checks
+                                    .filter((c) => !c.ok)
+                                    .map((c, i) => (
+                                        <span key={i} className='block text-[13px] text-rose-300/80'>
+                                            {c.check}
+                                            {c.note ? `: ${c.note}` : ''}
+                                        </span>
+                                    ))}
+                            </span>
+                        </li>
+                    ))}
+                </ul>
+            ) : (
+                <p className='text-sm text-white/40'>No runs reported yet.</p>
+            )}
+        </>
     );
 }
 

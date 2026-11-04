@@ -135,6 +135,9 @@ export const fields = {
     title: text(200).min(1, 'is required'),
     summary: text(300),
     description: text(20_000),
+    /** A routine's steps or checks, in order. */
+    lines: z.array(text(500).min(1, 'is required')).max(50, 'at most 50'),
+    definition_of_done: text(2000),
     status: z.enum(AGENT_STATUSES, `one of ${AGENT_STATUSES.join(', ')}`),
     priority: z.enum(['urgent', 'high', 'normal', 'low'], 'one of urgent, high, normal, low'),
     domain: text(60),

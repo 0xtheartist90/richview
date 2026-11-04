@@ -1,19 +1,26 @@
 import { authAgent, fail, guarded, isUuid, parseBody, writes } from '@/lib/agent-api';
-import { RECURRING_SELECT, type RecurringRow, reportRun } from '@/lib/recurring';
+import { CheckResult, RECURRING_SELECT, type RecurringRow, reportRun } from '@/lib/recurring';
 import { db } from '@/lib/supabase';
 
 import { z } from 'zod';
 
-const Run = z.strictObject({
-    status: z.enum(['ok', 'failed'], 'ok or failed'),
-    /** What happened, in a line or more (shown in the run history; on a failure also on the Review card). */
-    note: z.string().trim().max(5000, 'at most 5000 characters').optional(),
-    /** When it ran (ISO); now when left out. */
-    ran_at: z.iso
-        .datetime({ offset: true, error: 'an ISO date-time, e.g. 2026-11-03T12:45:00Z' })
-        .refine((t) => new Date(t).getTime() <= Date.now() + 5 * 60_000, 'not in the future')
-        .optional()
-});
+const Run = z
+    .strictObject({
+        status: z.enum(['ok', 'failed'], 'ok or failed'),
+        /** What happened, in a line or more (shown in the run history; on a failure also on the Review card). */
+        note: z.string().trim().max(5000, 'at most 5000 characters').optional(),
+        /** When it ran (ISO); now when left out. */
+        ran_at: z.iso
+            .datetime({ offset: true, error: 'an ISO date-time, e.g. 2026-11-03T12:45:00Z' })
+            .refine((t) => new Date(t).getTime() <= Date.now() + 5 * 60_000, 'not in the future')
+            .optional(),
+        /** What each of the routine's checks gave. */
+        checks: z.array(CheckResult).max(50, 'at most 50').optional()
+    })
+    .refine((r) => r.status === 'failed' || !r.checks?.some((c) => !c.ok), {
+        path: ['status'],
+        error: 'must be failed when a check failed'
+    });
 
 /**
  * Reports a run of a routine: `ok`, or `failed` (which also puts a card on Review). Its owner, or any agent that
@@ -43,6 +50,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
                     status: run.status,
                     ran_at: run.ran_at,
                     note: run.note,
+                    checks: run.check_results,
                     agent: run.agent?.name ?? me.name,
                     review_task: run.review_task
                 }

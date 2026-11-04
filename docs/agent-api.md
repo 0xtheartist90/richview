@@ -252,6 +252,8 @@ const valid = crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(req.head
 
 When one of your routines failed or ran late (see Routines below), you also get `{ "event": "task_created", "taskId", "title", "owner" }` for its Review card, signed the same way.
 
+When Richie asks for a change to one of your routines, its owner and the project's lead get `{ "event": "routine_change_requested", "role", "by": "Richie", "requestId", "routineId", "project", "title", "owner", "request" }`, signed the same way. See [Change requests](#change-requests).
+
 When Richie changes a card in the app, the owner and the project's lead get a POST, signed the same way:
 
 - **Edits:** a new title, owner or priority, a move to another status, or a comment send (with `role` `previous_owner` for the agent a card was taken from) `{ "event": "task_updated", "role", "by": "Richie", "taskId", "project", "title", "owner", "changes": { "status": ["planned", "blocked"] }, "comment" }`.
@@ -275,6 +277,19 @@ A run that went fine (`"status": "ok"`) only shows on the dashboard.
 
 The rules for who can write and who can own are the same as for tasks. The routine's owner, or any agent that writes in its project, reports its runs.
 
+### Steps, checks and definition of done
+
+Richie steers routines from what he sees on the dashboard, so write down how each routine really works. A routine without steps or checks shows `no steps` on its tile.
+
+| Field | What goes in it |
+| --- | --- |
+| `steps` | What you do, in order, one action per line (at most 50 lines of 500 characters) |
+| `checks` | What you verify on every run, each one a statement that passes or fails (same limits) |
+| `definition_of_done` | When a run counts as finished (at most 2000 characters) |
+| `description` | Optional background: why the routine exists and how it fits in |
+
+Sending `steps` or `checks` replaces the whole list; `[]` empties it. RichView keeps a history of each change to these fields and to `description`, with who made it, and shows it on the routine.
+
 ### Schedule
 
 | `schedule` | Due |
@@ -292,13 +307,13 @@ The rules for who can write and who can own are the same as for tasks. The routi
 - **Times (`at`):** written as `HH:MM`, in `timezone` (default `Asia/Bangkok`); the dashboard shows them in Bangkok time. Without `at`, a run any time that day counts, and it is late after 23:59 plus grace.
 - **Grace (`grace_minutes`):** how long after a due time a run may still come. The default is 60 minutes, or the interval for `hours` and `minutes`.
 - **Which run counts:** a run covers the first due time it came before (within grace), and one run covers one due time.
-- **Titles:** keep titles short and fixed ("Daily VPS Check"). The time belongs in the schedule, and the one-line summary goes in `summary`. Put the steps and the definition of done in `description`: the dashboard shows it when a routine is opened.
+- **Titles:** keep titles short and fixed ("Daily VPS Check"). The time belongs in the schedule, and the one-line summary goes in `summary`. Steps, checks and the definition of done have their own fields (see below).
 
 ### Fields
 
 A routine takes:
 
-- `title`, `summary`, `description`, `context`, `priority`, `domain`, `owner` and `reviewer`;
+- `title`, `summary`, `description`, `steps`, `checks`, `definition_of_done`, `context`, `priority`, `domain`, `owner` and `reviewer`;
 - `schedule` (required), `grace_minutes`, `timezone` and `active` (send `false` to pause it).
 
 ### GET /recurring
@@ -323,7 +338,9 @@ curl -s -X POST "$RV/api/agent/recurring" -H "Authorization: Bearer $KEY" -H "Co
   "project": "sre",
   "title": "Daily PDF Catalin",
   "summary": "PDF with the day'\''s numbers for Catalin",
-  "description": "1. Pull the day'\''s revenue per model\n2. Render the PDF\n3. Send it to Catalin on Telegram\nDone when Catalin has the PDF.",
+  "steps": ["Pull the day'\''s revenue per model", "Render the PDF", "Send it to Catalin on Telegram"],
+  "checks": ["Every model of the day is in the PDF", "Totals match the revenue table"],
+  "definition_of_done": "Catalin has the PDF.",
   "schedule": { "every": "day", "at": ["19:45"] }
 }'
 ```
@@ -332,7 +349,11 @@ The answer is `201` with `{ "recurring": { "id", "schedule", … } }`.
 
 ### GET /recurring/:id
 
-Returns one routine with its state and its runs of the last 8 days, newest first: `id`, `status`, `due_at`, `ran_at`, `note`, `agent` and `review_task`.
+Returns one routine with its state and, newest first:
+
+- `runs`: the last 8 days, with `id`, `status`, `due_at`, `ran_at`, `note`, `checks`, `agent` and `review_task`.
+- `requests`: the changes Richie asked for (see [Change requests](#change-requests)).
+- `changes`: its history, with `field`, `before`, `after`, `agent` and `created_at`.
 
 ```bash
 curl -s "$RV/api/agent/recurring/$ROUTINE" -H "Authorization: Bearer $KEY"
@@ -340,7 +361,7 @@ curl -s "$RV/api/agent/recurring/$ROUTINE" -H "Authorization: Bearer $KEY"
 
 ### PATCH /recurring/:id
 
-Changes any field, including the schedule and its times.
+Changes any field, including the steps, the checks, the schedule and its times.
 
 ```bash
 curl -s -X PATCH "$RV/api/agent/recurring/$ROUTINE" -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
@@ -353,6 +374,7 @@ Reports a run.
 
 - `status` is `ok` or `failed`.
 - `note` is optional. Say what happened; on a failure it goes on the Review card.
+- `checks` is optional: what each check gave, as `{ "check", "ok", "note" }`, with `check` written as in the routine's `checks`. If a check failed, `status` must be `failed`. Without a `note`, the failed checks go on the Review card.
 - `ran_at` is optional, as an ISO time; the default is now.
 
 ```bash
@@ -365,7 +387,42 @@ curl -s -X POST "$RV/api/agent/recurring/$ROUTINE/runs" -H "Authorization: Beare
   -d '{ "status": "failed", "note": "VPS 3 unreachable since 02:10" }'
 ```
 
-The answer is `201` with `{ "run": { "id", "status", "ran_at", "note", "agent", "review_task" } }`. `review_task` is the Review card a failure raised.
+```bash
+curl -s -X POST "$RV/api/agent/recurring/$ROUTINE/runs" -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{ "status": "failed", "checks": [{ "check": "Every model of the day is in the PDF", "ok": true }, { "check": "Totals match the revenue table", "ok": false, "note": "Off by $120" }] }'
+```
+
+The answer is `201` with `{ "run": { "id", "status", "ran_at", "note", "checks", "agent", "review_task" } }`. `review_task` is the Review card a failure raised.
+
+### Change requests
+
+Richie asks for changes to a routine on the dashboard. A request stays open until the routine's owner, or an agent that writes in its project, closes it:
+
+1. **Hear about it:** through the `routine_change_requested` webhook, or with `GET /recurring/requests`.
+2. **Make the change:** with `PATCH /recurring/:id`.
+3. **Close it:** with `PATCH /recurring/:id/requests/:requestId`. Richie reads your reply on the routine.
+
+### GET /recurring/requests
+
+Returns open requests, oldest first, with `id`, `routine`, `title`, `project`, `owner`, `request`, `status`, `reply`, `created_at`, `resolved_at` and `resolved_by`. `status` (`open`, `done`, `declined`), `project` and `owner` narrow it.
+
+```bash
+curl -s "$RV/api/agent/recurring/requests?owner=Morpheus" -H "Authorization: Bearer $KEY"
+```
+
+### PATCH /recurring/:id/requests/:requestId
+
+Closes a request.
+
+- `status` is `done` or `declined`.
+- `reply` says what you changed, or why not. It is required when you decline.
+
+```bash
+curl -s -X PATCH "$RV/api/agent/recurring/$ROUTINE/requests/$REQUEST" -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{ "status": "done", "reply": "Added a check on duplicate payments" }'
+```
+
+The answer is `{ "request": { … } }`, or `409` if it is no longer open.
 
 ### DELETE /recurring/:id
 

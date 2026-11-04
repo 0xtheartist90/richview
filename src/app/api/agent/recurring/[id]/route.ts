@@ -3,7 +3,11 @@ import {
     RECURRING_SELECT,
     type RecurringRow,
     Schedule,
+    apiChange,
     apiRecurring,
+    apiRequest,
+    logChanges,
+    playbookLog,
     recentRuns,
     scheduleColumns,
     validTimezone
@@ -20,6 +24,9 @@ const Patch = z
         title: fields.title.optional(),
         summary: fields.summary.nullable().optional(),
         description: fields.description.nullable().optional(),
+        steps: fields.lines.optional(),
+        checks: fields.lines.optional(),
+        definition_of_done: fields.definition_of_done.nullable().optional(),
         context: fields.context.nullable().optional(),
         priority: fields.priority.optional(),
         domain: fields.domain.nullable().optional(),
@@ -42,7 +49,7 @@ async function row(id: string): Promise<RecurringRow | null> {
     return (data as RecurringRow | null) ?? null;
 }
 
-/** One routine (any project), with where it stands now and its runs of the last 8 days, newest first. */
+/** One routine (any project), with where it stands now, its runs of the last 8 days, its change requests and history, newest first. */
 export async function GET(req: Request, { params }: Params) {
     return guarded(async () => {
         const me = await authAgent(req);
@@ -51,7 +58,8 @@ export async function GET(req: Request, { params }: Params) {
         if (!isUuid(id)) return fail(400, 'id: not a recurring id');
         const r = await row(id);
         if (!r) return fail(404, 'No such recurring task');
-        const runs = (await recentRuns([r.id])).get(r.id) ?? [];
+        const [recent, log] = await Promise.all([recentRuns([r.id]), playbookLog([r.id])]);
+        const runs = recent.get(r.id) ?? [];
 
         return Response.json({
             recurring: apiRecurring(
@@ -65,9 +73,12 @@ export async function GET(req: Request, { params }: Params) {
                 due_at: x.due_at,
                 ran_at: x.ran_at,
                 note: x.note,
+                checks: x.check_results,
                 agent: x.agent?.name ?? null,
                 review_task: x.task_id
-            }))
+            })),
+            requests: (log.requests.get(r.id) ?? []).map(apiRequest),
+            changes: (log.changes.get(r.id) ?? []).map(apiChange)
         });
     });
 }
@@ -114,6 +125,7 @@ export async function PATCH(req: Request, { params }: Params) {
             .select(RECURRING_SELECT)
             .single();
         if (error) throw new Error(error.message);
+        await logChanges(r, data as RecurringRow, me.id);
 
         return Response.json({ recurring: apiRecurring(data as RecurringRow) });
     });
